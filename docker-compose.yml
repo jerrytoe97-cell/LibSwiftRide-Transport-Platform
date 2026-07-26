@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: libswiftride
+      POSTGRES_USER: libswiftride
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-libswiftride}
+    ports: ["5432:5432"]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U libswiftride"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["6379:6379"]
+    volumes: [redis_data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://libswiftride:${POSTGRES_PASSWORD:-libswiftride}@postgres:5432/libswiftride
+      REDIS_URL: redis://redis:6379
+    ports: ["4000:4000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/health/live"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  web:
+    build: { context: ., dockerfile: Dockerfile.frontend, args: { APP: web, VITE_API_URL: http://localhost:4000/api/v1, VITE_WS_URL: ws://localhost:4000/ws } }
+    ports: ["3000:80"]
+    depends_on: [api]
+  passenger:
+    build: { context: ., dockerfile: Dockerfile.frontend, args: { APP: passenger, VITE_API_URL: http://localhost:4000/api/v1, VITE_WS_URL: ws://localhost:4000/ws } }
+    ports: ["3001:80"]
+    depends_on: [api]
+  driver:
+    build: { context: ., dockerfile: Dockerfile.frontend, args: { APP: driver, VITE_API_URL: http://localhost:4000/api/v1, VITE_WS_URL: ws://localhost:4000/ws } }
+    ports: ["3002:80"]
+    depends_on: [api]
+  fleet:
+    build: { context: ., dockerfile: Dockerfile.frontend, args: { APP: fleet, VITE_API_URL: http://localhost:4000/api/v1, VITE_WS_URL: ws://localhost:4000/ws } }
+    ports: ["3003:80"]
+    depends_on: [api]
+  admin:
+    build: { context: ., dockerfile: Dockerfile.frontend, args: { APP: admin, VITE_API_URL: http://localhost:4000/api/v1, VITE_WS_URL: ws://localhost:4000/ws } }
+    ports: ["3004:80"]
+    depends_on: [api]
+  dispatcher:
+    build: { context: ., dockerfile: Dockerfile.frontend, args: { APP: dispatcher, VITE_API_URL: http://localhost:4000/api/v1, VITE_WS_URL: ws://localhost:4000/ws } }
+    ports: ["3005:80"]
+    depends_on: [api]
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -1,0 +1,135 @@
+openapi: 3.1.0
+info:
+  title: LibSwiftRide API
+  version: 0.2.0
+  description: Versioned API for LibSwiftRide passengers, drivers, fleets and operations.
+servers:
+  - url: https://api.example.com/api/v1
+  - url: http://localhost:4000/api/v1
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
+  schemas:
+    Location:
+      type: object
+      required: [address, latitude, longitude]
+      properties:
+        address: { type: string }
+        latitude: { type: number, minimum: -90, maximum: 90 }
+        longitude: { type: number, minimum: -180, maximum: 180 }
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: {}
+paths:
+  /auth/register:
+    post:
+      summary: Register a passenger or driver account
+      responses:
+        "201": { description: Account created }
+        "422": { description: Validation error }
+  /auth/login:
+    post:
+      summary: Sign in and issue access and refresh tokens
+      responses:
+        "200": { description: Authenticated }
+        "401": { description: Invalid credentials }
+  /auth/refresh:
+    post:
+      summary: Rotate a refresh token
+      responses:
+        "200": { description: Tokens rotated }
+        "401": { description: Invalid refresh token }
+  /rides/quote:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Calculate a server-authoritative fare estimate
+      responses:
+        "200": { description: Fare quote }
+  /rides:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: List role-scoped ride history
+      responses: { "200": { description: Ride history } }
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Book a ride
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string }
+      responses:
+        "201": { description: Ride requested }
+  /rides/{id}:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Read a participant-authorized ride
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Ride }
+        "403": { description: Access denied }
+  /rides/{id}/transitions:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Advance a ride through an authorized lifecycle transition
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Updated ride }
+  /rides/{id}/payments:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Create a cash, mobile-money or Stripe payment
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "201": { description: Payment created }
+  /payments/mobile-money/{method}/display:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Display the selected Mobile Money recipient to an authenticated passenger
+      parameters:
+        - in: path
+          name: method
+          required: true
+          schema: { type: string, enum: [ORANGE_MONEY, MTN_MOMO] }
+      responses:
+        "200": { description: Selected Mobile Money display configuration }
+        "503": { description: Selected destination is not configured }
+  /wallet:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Read the authenticated user's wallet and ledger
+      responses: { "200": { description: Wallet } }
+  /fleet/overview:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Read manager-authorized fleet data
+      responses: { "200": { description: Fleet overview } }
+  /admin/overview:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Read operational analytics
+      responses: { "200": { description: Analytics overview } }
+  /admin/settings/payments:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Read payment configuration status without account-number values
+      responses: { "200": { description: Payment configuration status } }

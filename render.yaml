@@ -1,0 +1,101 @@
+databases:
+  - name: libswiftride-postgres
+    plan: starter
+    databaseName: libswiftride
+    user: libswiftride
+    ipAllowList: []
+
+services:
+  - type: redis
+    name: libswiftride-redis
+    plan: starter
+    ipAllowList: []
+    maxmemoryPolicy: allkeys-lru
+
+  - type: web
+    name: libswiftride-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health/ready
+    autoDeployTrigger: checksPass
+    preDeployCommand: node apps/api/node_modules/prisma/build/index.js migrate deploy --schema apps/api/prisma/schema.prisma
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: { name: libswiftride-postgres, property: connectionString }
+      - key: REDIS_URL
+        fromService: { type: redis, name: libswiftride-redis, property: connectionString }
+      - key: NODE_ENV
+        value: production
+      - key: API_PORT
+        value: "4000"
+      - key: CORS_ORIGINS
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: PAYMENT_WEBHOOK_SECRET
+        generateValue: true
+      - key: METRICS_TOKEN
+        generateValue: true
+      - key: PAYMENTS_ENABLED
+        value: "false"
+      - key: PAYMENT_PROVIDER
+        value: sandbox
+      - key: ORANGE_MONEY_NUMBER
+        sync: false
+      - key: MTN_MOMO_NUMBER
+        sync: false
+
+  - type: web
+    name: libswiftride-web
+    runtime: static
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @libswiftride/web build
+    staticPublishPath: apps/web/dist
+    autoDeployTrigger: checksPass
+    envVars: &frontendEnv
+      - key: VITE_API_URL
+        sync: false
+      - key: VITE_WS_URL
+        sync: false
+    routes: [{ type: rewrite, source: "/*", destination: "/index.html" }]
+  - type: web
+    name: libswiftride-passenger
+    runtime: static
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @libswiftride/passenger build
+    staticPublishPath: apps/passenger/dist
+    autoDeployTrigger: checksPass
+    envVars: *frontendEnv
+    routes: [{ type: rewrite, source: "/*", destination: "/index.html" }]
+  - type: web
+    name: libswiftride-driver
+    runtime: static
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @libswiftride/driver build
+    staticPublishPath: apps/driver/dist
+    autoDeployTrigger: checksPass
+    envVars: *frontendEnv
+    routes: [{ type: rewrite, source: "/*", destination: "/index.html" }]
+  - type: web
+    name: libswiftride-fleet
+    runtime: static
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @libswiftride/fleet build
+    staticPublishPath: apps/fleet/dist
+    autoDeployTrigger: checksPass
+    envVars: *frontendEnv
+    routes: [{ type: rewrite, source: "/*", destination: "/index.html" }]
+  - type: web
+    name: libswiftride-admin
+    runtime: static
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @libswiftride/admin build
+    staticPublishPath: apps/admin/dist
+    autoDeployTrigger: checksPass
+    envVars: *frontendEnv
+    routes: [{ type: rewrite, source: "/*", destination: "/index.html" }]
+  - type: web
+    name: libswiftride-dispatcher
+    runtime: static
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @libswiftride/dispatcher build
+    staticPublishPath: apps/dispatcher/dist
+    autoDeployTrigger: checksPass
+    envVars: *frontendEnv
+    routes: [{ type: rewrite, source: "/*", destination: "/index.html" }]

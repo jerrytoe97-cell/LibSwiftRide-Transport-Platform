@@ -1,0 +1,391 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  PASSENGER
+  DRIVER
+  FLEET_MANAGER
+  DISPATCHER
+  ADMIN
+  SUPPORT
+}
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+enum DriverStatus {
+  OFFLINE
+  AVAILABLE
+  ON_TRIP
+  SUSPENDED
+}
+
+enum RideStatus {
+  REQUESTED
+  SEARCHING
+  DRIVER_ASSIGNED
+  DRIVER_ARRIVING
+  DRIVER_ARRIVED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  CASH
+  ORANGE_MONEY
+  MTN_MOMO
+  STRIPE
+  WALLET
+}
+
+enum WalletTransactionType {
+  CREDIT
+  DEBIT
+  HOLD
+  RELEASE
+  PAYOUT
+  REFUND
+  ADJUSTMENT
+}
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+  PUSH
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+  READ
+}
+
+enum KycStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum KycDocumentType {
+  NATIONAL_ID
+  DRIVER_LICENSE
+  VEHICLE_REGISTRATION
+  INSURANCE
+  INSPECTION
+  PROFILE_PHOTO
+}
+
+model User {
+  id           String     @id @default(uuid())
+  phone        String     @unique
+  email        String?    @unique
+  emailVerifiedAt DateTime?
+  passwordHash String
+  firstName    String
+  lastName     String
+  role         UserRole
+  status       UserStatus @default(PENDING)
+  driver       Driver?
+  fleet        Fleet?     @relation("FleetManager")
+  rides        Ride[]     @relation("PassengerRides")
+  refreshTokens RefreshToken[]
+  verificationTokens VerificationToken[]
+  wallet       Wallet?
+  ratingsGiven Rating[]    @relation("RatingAuthor")
+  ratingsReceived Rating[] @relation("RatingSubject")
+  notifications Notification[]
+  kycReviews   KycCase[] @relation("KycReviewer")
+  devices      Device[]
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+model VerificationToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+  @@index([userId, type, expiresAt])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  revokedAt DateTime?
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  @@index([userId, expiresAt])
+}
+
+model Fleet {
+  id        String    @id @default(uuid())
+  name      String
+  managerId String    @unique
+  manager   User      @relation("FleetManager", fields: [managerId], references: [id])
+  drivers   Driver[]
+  vehicles  Vehicle[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Driver {
+  id            String       @id @default(uuid())
+  userId        String       @unique
+  user          User         @relation(fields: [userId], references: [id])
+  fleetId       String?
+  fleet         Fleet?       @relation(fields: [fleetId], references: [id])
+  status        DriverStatus @default(OFFLINE)
+  licenseNumber String       @unique
+  nationalIdRef String?
+  onboardingStep String      @default("PROFILE")
+  approvedById   String?
+  verifiedAt    DateTime?
+  rides         Ride[]
+  vehicle       Vehicle?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  kycCase       KycCase?
+}
+
+model Vehicle {
+  id          String   @id @default(uuid())
+  fleetId     String?
+  fleet       Fleet?   @relation(fields: [fleetId], references: [id])
+  driverId    String?  @unique
+  driver      Driver?  @relation(fields: [driverId], references: [id])
+  make        String
+  model       String
+  year        Int
+  color       String
+  plateNumber String   @unique
+  active      Boolean  @default(true)
+  inspectionExpiresAt DateTime?
+  insuranceExpiresAt  DateTime?
+  registrationExpiresAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Ride {
+  id                    String     @id @default(uuid())
+  passengerId           String
+  passenger             User       @relation("PassengerRides", fields: [passengerId], references: [id])
+  driverId              String?
+  driver                Driver?    @relation(fields: [driverId], references: [id])
+  status                 RideStatus @default(REQUESTED)
+  pickupAddress          String
+  pickupLatitude         Decimal    @db.Decimal(9, 6)
+  pickupLongitude        Decimal    @db.Decimal(9, 6)
+  destinationAddress     String
+  destinationLatitude    Decimal    @db.Decimal(9, 6)
+  destinationLongitude   Decimal    @db.Decimal(9, 6)
+  estimatedDistanceM     Int
+  estimatedDurationSec   Int
+  fareMinor              Int
+  driverEarningsMinor    Int
+  companyCommissionMinor Int
+  currency               String     @default("LRD")
+  paymentMethod           PaymentMethod @default(CASH)
+  promoCodeId             String?
+  promoCode               PromoCode? @relation(fields: [promoCodeId], references: [id])
+  discountMinor           Int        @default(0)
+  idempotencyKey         String
+  requestedAt            DateTime   @default(now())
+  startedAt              DateTime?
+  completedAt            DateTime?
+  payment                Payment?
+  events                 RideEvent[]
+  ratings                Rating[]
+  @@unique([passengerId, idempotencyKey])
+  @@index([status, requestedAt])
+  @@index([driverId, status])
+}
+
+model RideEvent {
+  id        String   @id @default(uuid())
+  rideId    String
+  ride      Ride     @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  type      String
+  actorId   String?
+  metadata  Json?
+  createdAt DateTime @default(now())
+  @@index([rideId, createdAt])
+}
+
+model Payment {
+  id             String        @id @default(uuid())
+  rideId         String        @unique
+  ride           Ride          @relation(fields: [rideId], references: [id])
+  provider       String
+  providerRef    String?       @unique
+  idempotencyKey String        @unique
+  amountMinor    Int
+  currency       String        @default("LRD")
+  method         PaymentMethod
+  status         PaymentStatus @default(PENDING)
+  providerPayload Json?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+}
+
+model Wallet {
+  id           String              @id @default(uuid())
+  userId       String              @unique
+  user         User                @relation(fields: [userId], references: [id])
+  currency     String              @default("LRD")
+  balanceMinor Int                 @default(0)
+  transactions WalletTransaction[]
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+}
+
+model WalletTransaction {
+  id             String                @id @default(uuid())
+  walletId       String
+  wallet         Wallet                @relation(fields: [walletId], references: [id])
+  type           WalletTransactionType
+  amountMinor    Int
+  balanceMinor   Int
+  reference      String                @unique
+  idempotencyKey String                @unique
+  description    String
+  metadata       Json?
+  createdAt      DateTime              @default(now())
+  @@index([walletId, createdAt])
+}
+
+model Rating {
+  id        String   @id @default(uuid())
+  rideId    String
+  ride      Ride     @relation(fields: [rideId], references: [id])
+  authorId  String
+  author    User     @relation("RatingAuthor", fields: [authorId], references: [id])
+  subjectId String
+  subject   User     @relation("RatingSubject", fields: [subjectId], references: [id])
+  score     Int
+  comment   String?
+  createdAt DateTime @default(now())
+  @@unique([rideId, authorId])
+  @@index([subjectId, createdAt])
+}
+
+model PromoCode {
+  id              String   @id @default(uuid())
+  code            String   @unique
+  description     String
+  percentageOff   Int?
+  amountOffMinor  Int?
+  maxDiscountMinor Int?
+  minimumFareMinor Int     @default(0)
+  startsAt        DateTime
+  expiresAt       DateTime
+  maxUses         Int?
+  uses            Int      @default(0)
+  active          Boolean  @default(true)
+  rides           Ride[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Notification {
+  id        String             @id @default(uuid())
+  userId    String
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel   NotificationChannel
+  status    NotificationStatus @default(PENDING)
+  template  String
+  title     String
+  body      String
+  data      Json?
+  sentAt    DateTime?
+  readAt    DateTime?
+  createdAt DateTime           @default(now())
+  @@index([userId, status, createdAt])
+}
+
+model Device {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform  String
+  pushToken String   @unique
+  active    Boolean  @default(true)
+  lastSeenAt DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([userId, active])
+}
+
+model KycCase {
+  id             String        @id @default(uuid())
+  driverId       String        @unique
+  driver         Driver        @relation(fields: [driverId], references: [id])
+  status         KycStatus     @default(DRAFT)
+  submittedAt    DateTime?
+  reviewedAt     DateTime?
+  reviewerId     String?
+  reviewer       User?         @relation("KycReviewer", fields: [reviewerId], references: [id])
+  rejectionCode  String?
+  rejectionNotes String?
+  documents      KycDocument[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  @@index([status, submittedAt])
+}
+
+model KycDocument {
+  id          String          @id @default(uuid())
+  kycCaseId   String
+  kycCase     KycCase         @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  type        KycDocumentType
+  storageKey  String
+  mimeType    String
+  checksum    String
+  expiresAt   DateTime?
+  verifiedAt  DateTime?
+  createdAt   DateTime        @default(now())
+  @@unique([kycCaseId, type])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String?
+  ipAddress  String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  @@index([entityType, entityId])
+  @@index([actorId, createdAt])
+}
