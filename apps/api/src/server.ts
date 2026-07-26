@@ -15,6 +15,7 @@ import { prisma, redis } from "./lib.js";
 import { activateScheduledRides, updateDriverLocation } from "./services/dispatch.js";
 import { deliverPendingNotifications } from "./services/notifications.js";
 import { logger } from "./logger.js";
+import { distanceMetres, estimateEtaSeconds } from "./services/tracking.js";
 
 const app = express();
 collectDefaultMetrics({ prefix: "libswiftride_" });
@@ -95,9 +96,14 @@ wss.on("connection", async (socket, request) => {
         lastLocationAt = Date.now();
         if (event.latitude < -90 || event.latitude > 90 || event.longitude < -180 || event.longitude > 180) throw new Error("Location is outside valid bounds");
         const location = await updateDriverLocation(user.sub, event.latitude, event.longitude);
-        const activeRide = await prisma.ride.findFirst({ where: { driverId: location.driverId, status: { in: ["DRIVER_ASSIGNED", "DRIVER_ARRIVING", "DRIVER_ARRIVED", "IN_PROGRESS"] } }, select: { id: true } });
+        const activeRide = await prisma.ride.findFirst({ where: { driverId: location.driverId, status: { in: ["DRIVER_ASSIGNED", "DRIVER_ARRIVING", "DRIVER_ARRIVED", "PASSENGER_BOARDED", "IN_PROGRESS"] } }, select: { id: true, status: true, pickupLatitude: true, pickupLongitude: true, destinationLatitude: true, destinationLongitude: true } });
         if (activeRide) {
-          const message = JSON.stringify({ type: "driver.location", rideId: activeRide.id, latitude: location.latitude, longitude: location.longitude, at: location.at });
+          await prisma.routePoint.create({ data: { rideId: activeRide.id, latitude: location.latitude, longitude: location.longitude, ...(Number.isInteger(event.heading) && event.heading >= 0 && event.heading <= 359 ? { heading: event.heading } : {}), ...(Number.isFinite(event.speedMps) && event.speedMps >= 0 && event.speedMps <= 100 ? { speedMps: event.speedMps } : {}) } });
+          const target = ["PASSENGER_BOARDED", "IN_PROGRESS"].includes(activeRide.status)
+            ? { latitude: Number(activeRide.destinationLatitude), longitude: Number(activeRide.destinationLongitude) }
+            : { latitude: Number(activeRide.pickupLatitude), longitude: Number(activeRide.pickupLongitude) };
+          const remainingDistanceM = distanceMetres(location, target);
+          const message = JSON.stringify({ type: "driver.location", rideId: activeRide.id, latitude: location.latitude, longitude: location.longitude, at: location.at, remainingDistanceM, etaSeconds: estimateEtaSeconds(remainingDistanceM, Number.isFinite(event.speedMps) ? event.speedMps : undefined) });
           for (const subscriber of rideSubscriptions.get(activeRide.id) ?? []) if (subscriber.readyState === 1) subscriber.send(message);
         }
         socket.send(JSON.stringify({ type: "location.ack", at: location.at }));

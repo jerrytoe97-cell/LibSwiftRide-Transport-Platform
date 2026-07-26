@@ -36,6 +36,7 @@ enum RideStatus {
   DRIVER_ASSIGNED
   DRIVER_ARRIVING
   DRIVER_ARRIVED
+  PASSENGER_BOARDED
   IN_PROGRESS
   COMPLETED
   CANCELLED
@@ -111,6 +112,29 @@ enum ReviewStatus {
   HIDDEN
 }
 
+enum SafetyIncidentStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+enum RefundStatus {
+  REQUESTED
+  APPROVED
+  PROCESSING
+  COMPLETED
+  REJECTED
+  FAILED
+}
+
+enum PayoutStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+  CANCELLED
+}
+
 model User {
   id           String     @id @default(uuid())
   phone        String     @unique
@@ -133,6 +157,8 @@ model User {
   kycReviews   KycCase[] @relation("KycReviewer")
   devices      Device[]
   favouritePlaces FavouritePlace[]
+  emergencyContacts EmergencyContact[]
+  tripShares    TripShare[] @relation("TripShareOwner")
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 }
@@ -189,6 +215,7 @@ model Driver {
   updatedAt     DateTime     @updatedAt
   kycCase       KycCase?
   availabilityWindows DriverAvailability[]
+  payouts       DriverPayout[]
 }
 
 model Vehicle {
@@ -233,14 +260,28 @@ model Ride {
   promoCodeId             String?
   promoCode               PromoCode? @relation(fields: [promoCodeId], references: [id])
   discountMinor           Int        @default(0)
+  baseFareMinor           Int        @default(0)
+  dynamicMultiplierBps    Int        @default(10000)
+  waitingTimeSec          Int        @default(0)
+  waitingFeeMinor         Int        @default(0)
+  tollMinor               Int        @default(0)
   idempotencyKey         String
   requestedAt            DateTime   @default(now())
   scheduledFor           DateTime?
   startedAt              DateTime?
+  acceptedAt             DateTime?
+  arrivedAt              DateTime?
+  boardedAt              DateTime?
   completedAt            DateTime?
+  cancelledAt            DateTime?
+  cancellationReason     String?
   payment                Payment?
   events                 RideEvent[]
   ratings                Rating[]
+  routePoints            RoutePoint[]
+  safetyIncidents        SafetyIncident[]
+  tripShares             TripShare[]
+  refunds                Refund[]
   @@unique([passengerId, idempotencyKey])
   @@index([status, requestedAt])
   @@index([driverId, status])
@@ -260,6 +301,18 @@ model RideEvent {
   @@index([rideId, createdAt])
 }
 
+model RoutePoint {
+  id          String   @id @default(uuid())
+  rideId      String
+  ride        Ride     @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  latitude    Decimal  @db.Decimal(9, 6)
+  longitude   Decimal  @db.Decimal(9, 6)
+  heading     Int?
+  speedMps    Decimal? @db.Decimal(7, 2)
+  recordedAt  DateTime @default(now())
+  @@index([rideId, recordedAt])
+}
+
 model Payment {
   id             String        @id @default(uuid())
   rideId         String        @unique
@@ -272,9 +325,48 @@ model Payment {
   method         PaymentMethod
   status         PaymentStatus @default(PENDING)
   providerPayload Json?
+  capturedAt      DateTime?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
   @@index([status, createdAt(sort: Desc)])
+  refunds        Refund[]
+}
+
+model Refund {
+  id             String       @id @default(uuid())
+  rideId         String
+  ride           Ride         @relation(fields: [rideId], references: [id])
+  paymentId      String?
+  payment        Payment?     @relation(fields: [paymentId], references: [id])
+  amountMinor    Int
+  reason         String
+  status         RefundStatus @default(REQUESTED)
+  requestedById  String
+  reviewedById   String?
+  providerRef    String?
+  idempotencyKey String       @unique
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  @@index([status, createdAt])
+  @@index([rideId, createdAt])
+}
+
+model DriverPayout {
+  id             String       @id @default(uuid())
+  driverId       String
+  driver         Driver       @relation(fields: [driverId], references: [id])
+  amountMinor    Int
+  currency       String       @default("LRD")
+  status         PayoutStatus @default(PENDING)
+  periodStart    DateTime
+  periodEnd      DateTime
+  idempotencyKey String       @unique
+  providerRef    String?
+  processedAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  @@index([driverId, createdAt])
+  @@index([status, createdAt])
 }
 
 model Wallet {
@@ -346,6 +438,51 @@ model DriverAvailability {
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
   @@index([driverId, startsAt])
+}
+
+model EmergencyContact {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  phone        String
+  relationship String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  @@index([userId])
+}
+
+model TripShare {
+  id         String   @id @default(uuid())
+  rideId     String
+  ride       Ride     @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  ownerId    String
+  owner      User     @relation("TripShareOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime @default(now())
+  @@index([rideId, expiresAt])
+}
+
+model SafetyIncident {
+  id             String               @id @default(uuid())
+  rideId         String
+  ride           Ride                 @relation(fields: [rideId], references: [id])
+  reporterId     String
+  status         SafetyIncidentStatus @default(OPEN)
+  category       String
+  note           String?
+  latitude       Decimal?             @db.Decimal(9, 6)
+  longitude      Decimal?             @db.Decimal(9, 6)
+  acknowledgedBy String?
+  acknowledgedAt DateTime?
+  resolvedBy     String?
+  resolvedAt     DateTime?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  @@index([status, createdAt])
+  @@index([rideId, createdAt])
 }
 
 model PromoCode {

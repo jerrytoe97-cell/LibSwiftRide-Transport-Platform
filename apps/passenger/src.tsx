@@ -12,7 +12,7 @@ type Quote = {
   companyCommissionMinor: number;
   estimatedDurationSec: number;
 };
-type PaymentMethod = "CASH" | "ORANGE_MONEY" | "MTN_MOMO" | "STRIPE";
+type PaymentMethod = "CASH" | "ORANGE_MONEY" | "MTN_MOMO" | "STRIPE" | "WALLET";
 type MobileMoneyDisplay = { method: "ORANGE_MONEY" | "MTN_MOMO"; paymentNumber: string };
 type Ride = {
   id: string;
@@ -46,6 +46,7 @@ function App() {
   const [favourites, setFavourites] = useState<FavouritePlace[]>([]);
   const [scheduledFor, setScheduledFor] = useState("");
   const [receipt, setReceipt] = useState<{ receiptNumber: string; fare: { subtotalMinor: number; discountMinor: number; totalMinor: number; currency: string } } | null>(null);
+  const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
 
   async function loadDashboard() {
     if (!apiClient.hasSession()) return;
@@ -69,9 +70,10 @@ function App() {
     const socket = apiClient.connect();
     socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "ride.subscribe", rideId: trackedRideId })));
     socket.addEventListener("message", (event) => {
-      const update = JSON.parse(event.data) as { type: string; latitude?: number; longitude?: number };
+      const update = JSON.parse(event.data) as { type: string; latitude?: number; longitude?: number; etaSeconds?: number };
       if (update.type === "driver.location" && update.latitude != null && update.longitude != null) {
         setLiveLocation({ latitude: update.latitude, longitude: update.longitude });
+        setEtaSeconds(update.etaSeconds ?? null);
       }
     });
     return () => socket.close();
@@ -144,6 +146,28 @@ function App() {
     }
   }
 
+  async function transitionRide(rideId: string, status: "PASSENGER_BOARDED" | "CANCELLED") {
+    try {
+      await apiClient.request(`/rides/${rideId}/transitions`, { method: "POST", body: JSON.stringify({ status, ...(status === "CANCELLED" ? { cancellationReason: "Cancelled by passenger" } : {}) }) });
+      await loadDashboard();
+    } catch (error) { setMessage((error as Error).message); }
+  }
+
+  async function sos(rideId: string) {
+    try {
+      await apiClient.request(`/rides/${rideId}/sos`, { method: "POST", body: JSON.stringify({ category: "SECURITY", ...(liveLocation ?? {}) }) });
+      setMessage("SOS sent to the LibSwiftRide safety team.");
+    } catch (error) { setMessage((error as Error).message); }
+  }
+
+  async function shareTrip(rideId: string) {
+    try {
+      const response = await apiClient.request<{ data: { token: string } }>(`/rides/${rideId}/share`, { method: "POST" });
+      await navigator.clipboard.writeText(`${window.location.origin}/shared-trip/${response.data.token}`);
+      setMessage("Private trip tracking link copied.");
+    } catch (error) { setMessage((error as Error).message); }
+  }
+
   return (
     <Shell product="Passenger">
       <div className="toolbar">
@@ -168,6 +192,7 @@ function App() {
               <option value="ORANGE_MONEY">Orange Money</option>
               <option value="MTN_MOMO">MTN MoMo</option>
               <option value="STRIPE">Stripe</option>
+              <option value="WALLET">Wallet</option>
             </select>
           </label>
           {mobileMoney && (
@@ -189,7 +214,7 @@ function App() {
             </div>
           )}
         </div>
-        <Map {...(liveLocation ?? {})} label={liveLocation ? "Live driver location" : "Pickup and destination"} />
+        <Map {...(liveLocation ?? {})} label={liveLocation ? `Live driver location${etaSeconds ? ` · ETA ${Math.ceil(etaSeconds / 60)} min` : ""}` : "Pickup and destination"} />
       </section>
       <section id="history" className="panel">
         <div className="toolbar"><h2>Your recent rides</h2><span>{unread} unread notifications</span></div>
@@ -197,7 +222,10 @@ function App() {
           <tbody>{rides.map((ride) => (
             <tr key={ride.id}>
               <td>{ride.pickupAddress} → {ride.destinationAddress}</td>
-              <td><button className="link-button" onClick={() => setTrackedRideId(ride.id)}>{ride.status.replaceAll("_", " ")}</button></td>
+              <td><button className="link-button" onClick={() => setTrackedRideId(ride.id)}>{ride.status.replaceAll("_", " ")}</button>
+                {ride.status === "DRIVER_ARRIVED" && <button className="link-button" onClick={() => transitionRide(ride.id, "PASSENGER_BOARDED")}>I have boarded</button>}
+                {!["COMPLETED", "CANCELLED"].includes(ride.status) && <><button className="link-button" onClick={() => shareTrip(ride.id)}>Share</button><button onClick={() => sos(ride.id)}>SOS</button><button className="link-button" onClick={() => transitionRide(ride.id, "CANCELLED")}>Cancel</button></>}
+              </td>
               <td>{money(ride.fareMinor)}</td>
               <td>{ride.status === "COMPLETED" && !ride.ratings.length
                 ? <span className="rating-actions">{[1, 2, 3, 4, 5].map((score) => <button key={score} onClick={() => rateRide(ride.id, score)} aria-label={`Rate ${score} stars`}>★</button>)}</span>

@@ -20,7 +20,7 @@ type RideHistory = { id: string; status: string; pickupAddress: string; destinat
 const nextStatus: Record<string, string> = {
   DRIVER_ASSIGNED: "DRIVER_ARRIVING",
   DRIVER_ARRIVING: "DRIVER_ARRIVED",
-  DRIVER_ARRIVED: "IN_PROGRESS",
+  PASSENGER_BOARDED: "IN_PROGRESS",
   IN_PROGRESS: "COMPLETED"
 };
 
@@ -75,7 +75,7 @@ function App() {
           watchId.current = navigator.geolocation.watchPosition((position) => {
             const location = { latitude: position.coords.latitude, longitude: position.coords.longitude };
             setCoords(location);
-            connection.send(JSON.stringify({ type: "driver.location", ...location }));
+            connection.send(JSON.stringify({ type: "driver.location", ...location, heading: position.coords.heading, speedMps: position.coords.speed }));
           }, () => setMessage("Location permission is required while online."), { enableHighAccuracy: true, maximumAge: 5_000 });
         };
       }
@@ -96,6 +96,22 @@ function App() {
     } catch (error) {
       setMessage((error as Error).message);
     }
+  }
+
+  async function rideAction(status: "CANCELLED") {
+    if (!dashboard?.activeRide) return;
+    try {
+      await apiClient.request(`/rides/${dashboard.activeRide.id}/transitions`, { method: "POST", body: JSON.stringify({ status, cancellationReason: "Cancelled by driver" }) });
+      await load();
+    } catch (error) { setMessage((error as Error).message); }
+  }
+
+  async function sos() {
+    if (!dashboard?.activeRide) return;
+    try {
+      await apiClient.request(`/rides/${dashboard.activeRide.id}/sos`, { method: "POST", body: JSON.stringify({ category: "SECURITY", ...coords }) });
+      setMessage("SOS sent to the LibSwiftRide safety team.");
+    } catch (error) { setMessage((error as Error).message); }
   }
 
   const online = dashboard?.driver.status === "AVAILABLE";
@@ -121,6 +137,8 @@ function App() {
             <p>{dashboard.activeRide.pickupAddress} → {dashboard.activeRide.destinationAddress}</p>
             <p><strong>{money(dashboard.activeRide.fareMinor)}</strong></p>
             {activeNextStatus && <Action onClick={advanceRide}>Mark {activeNextStatus.replaceAll("_", " ").toLowerCase()}</Action>}
+            {dashboard.activeRide.status === "DRIVER_ARRIVED" && <p>Waiting for the passenger to confirm boarding.</p>}
+            <div className="toolbar"><button onClick={sos}>SOS</button><button className="link-button" onClick={() => rideAction("CANCELLED")}>Cancel ride</button></div>
           </> : <p>No active ride. Stay online to receive a match.</p>}
           <p>Verification: {dashboard?.driver.kycStatus ?? "not started"} · Vehicle: {dashboard?.driver.vehicle?.plateNumber ?? "not assigned"}</p>
           <p>{dashboard?.unreadNotifications ?? 0} unread notifications</p>

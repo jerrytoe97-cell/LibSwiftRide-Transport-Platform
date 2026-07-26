@@ -32,6 +32,12 @@ type Promotion = { id: string; code: string; description: string; active: boolea
 type Passenger = { id: string; firstName: string; lastName: string; phone: string; status: string; _count: { rides: number } };
 type Review = { id: string; score: number; comment: string | null; author: { firstName: string; lastName: string }; subject: { firstName: string; lastName: string } };
 type KycCase = { id: string; driver: { user: { firstName: string; lastName: string } }; submittedAt: string };
+type Analytics = {
+  rides: { total: number; completed: number; cancelled: number; uniquePassengers: number; activeDrivers: number; averageAcceptanceSec: number | null; averageTripSec: number | null };
+  revenue: { discountsMinor: number; waitingFeesMinor: number; tollsMinor: number };
+  growth: { newPassengers: number; newDrivers: number };
+  safetyIncidents: number;
+};
 
 function App() {
   const [data, setData] = useState<Overview>({ activeRides: 0, availableDrivers: 0, completedRides: 0, grossBookingsMinor: 0, averageRating: null });
@@ -41,6 +47,7 @@ function App() {
   const [passengers, setPassengers] = useState<Passenger[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [kycCases, setKycCases] = useState<KycCase[]>([]);
+  const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -53,13 +60,15 @@ function App() {
       apiClient.request<{ data: Promotion[] }>("/admin/promos"),
       apiClient.request<{ data: Passenger[] }>("/admin/passengers"),
       apiClient.request<{ data: Review[] }>("/admin/reviews?status=PENDING"),
-      apiClient.request<{ data: KycCase[] }>("/admin/kyc?status=SUBMITTED")
-    ]).then(([overview, settings, operations, promoList, passengerList, reviewList, kycList]) => {
+      apiClient.request<{ data: KycCase[] }>("/admin/kyc?status=SUBMITTED"),
+      apiClient.request<{ data: Analytics }>(`/reports/analytics?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`)
+    ]).then(([overview, settings, operations, promoList, passengerList, reviewList, kycList, analyticsReport]) => {
       setData(overview.data);
       setPaymentSettings(settings.data);
       setReport(operations.data);
       setPromotions(promoList.data);
       setPassengers(passengerList.data); setReviews(reviewList.data); setKycCases(kycList.data);
+      setAnalytics(analyticsReport.data);
     }).catch((requestError: Error) => setError(requestError.message));
   }, []);
 
@@ -105,6 +114,17 @@ function App() {
           <Stat label="Completion rate" value={`${Math.round((report?.completionRate ?? 0) * 100)}%`} detail={`${report?.completedRides ?? 0} of ${report?.rides ?? 0} rides`} />
           <Stat label="Driver earnings" value={money(report?.driverEarningsMinor ?? 0)} detail="88% allocation" />
           <Stat label="Platform commission" value={money(report?.platformCommissionMinor ?? 0)} detail="12% allocation" />
+        </div>
+      </section>
+      <section className="panel">
+        <span className="eyebrow">30-day operational intelligence</span>
+        <h2>Passenger, driver and ride analytics</h2>
+        <div className="grid">
+          <Stat label="Unique passengers" value={String(analytics?.rides.uniquePassengers ?? 0)} detail={`${analytics?.growth.newPassengers ?? 0} new passengers`} />
+          <Stat label="Active drivers" value={String(analytics?.rides.activeDrivers ?? 0)} detail={`${analytics?.growth.newDrivers ?? 0} newly onboarded`} />
+          <Stat label="Average acceptance" value={analytics?.rides.averageAcceptanceSec == null ? "—" : `${analytics.rides.averageAcceptanceSec}s`} detail={`${analytics?.rides.cancelled ?? 0} cancellations`} />
+          <Stat label="Fare adjustments" value={money((analytics?.revenue.waitingFeesMinor ?? 0) + (analytics?.revenue.tollsMinor ?? 0))} detail={`${money(analytics?.revenue.discountsMinor ?? 0)} discounts`} />
+          <Stat label="Safety incidents" value={String(analytics?.safetyIncidents ?? 0)} detail="Requires operations review" />
         </div>
       </section>
       <section className="panel">

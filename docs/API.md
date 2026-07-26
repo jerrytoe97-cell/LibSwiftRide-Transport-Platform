@@ -16,6 +16,13 @@ Implemented foundation endpoints:
 | GET | `/rides?limit=&cursor=&status=` | Passenger/driver history with cursor metadata |
 | GET | `/rides/:id` | Ride participant, support or admin |
 | GET | `/rides/:id/receipt` | Completed-ride participant, support or admin |
+| POST | `/rides/:id/transitions` | Role-bound acceptance, arrival, boarding, start, completion and cancellation |
+| GET | `/rides/:id/tracking` | Participant/operations location and ETA |
+| GET | `/rides/:id/route-replay` | Participant/operations route replay |
+| POST | `/rides/:id/sos` | Active-ride participant safety alert |
+| POST | `/rides/:id/share` | Participant expiring trip-share token |
+| DELETE | `/rides/:rideId/shares/:id` | Trip-share owner revocation |
+| GET | `/trip-shares/:token` | Token-authorized limited live trip view |
 | GET/POST/DELETE | `/favourite-places` | Passenger-owned favourite places |
 | POST | `/rides/:id/complete` | Assigned driver or admin |
 | GET | `/drivers/me/earnings` | Driver |
@@ -26,7 +33,14 @@ Implemented foundation endpoints:
 | GET | `/dispatch/drivers` | Dispatcher/admin eligible available drivers |
 | GET | `/payments/mobile-money/:method/display` | Passenger; intentionally returns only the selected payment number |
 | POST | `/payments/webhooks/:provider` | Signed provider request |
+| POST | `/rides/:id/refunds` | Admin/support idempotent refund request |
+| PATCH | `/admin/refunds/:id` | Admin refund review |
+| GET | `/drivers/me/payouts` | Driver payout history |
+| POST | `/admin/drivers/:id/payouts` | Admin idempotent payout record |
+| GET/POST/DELETE | `/safety/emergency-contacts` | User-owned emergency contacts |
+| GET/PATCH | `/safety/incidents` | Operations safety queue |
 | GET | `/admin/overview` | Admin |
+| GET | `/reports/analytics` | Admin/dispatcher operational and financial analytics |
 | GET | `/admin/promos` | Admin promotion utilization |
 | PATCH | `/admin/promos/:id` | Admin promotion lifecycle management |
 | GET | `/admin/passengers` | Admin/support passenger search |
