@@ -1,0 +1,23 @@
+name: Deploy
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        type: choice
+        options: [staging, production]
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  deployment-gate:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deployment provider must be configured
+        run: |
+          echo "Cloud target, registry, migrations, smoke tests and rollback are intentionally provider-specific."
+          echo "Configure them and replace this gate before enabling deployments."
+          exit 1

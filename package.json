@@ -1,0 +1,24 @@
+{
+  "name": "libswiftride",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.13.1",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "test": "turbo test",
+    "format": "prettier --write .",
+    "db:generate": "pnpm --filter @libswiftride/api prisma:generate",
+    "db:migrate": "pnpm --filter @libswiftride/api prisma:migrate",
+    "db:deploy": "pnpm --filter @libswiftride/api prisma:deploy",
+    "compose:up": "docker compose up --build"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2",
+    "turbo": "^2.5.5",
+    "typescript": "^5.8.3"
+  }
+}
