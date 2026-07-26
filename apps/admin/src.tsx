@@ -20,19 +20,36 @@ type PaymentSettings = {
     configured: boolean;
   }>;
 };
+type OperationsReport = {
+  rides: number;
+  completedRides: number;
+  completionRate: number;
+  grossBookingsMinor: number;
+  driverEarningsMinor: number;
+  platformCommissionMinor: number;
+};
+type Promotion = { id: string; code: string; description: string; active: boolean; uses: number; maxUses: number | null; expiresAt: string };
 
 function App() {
   const [data, setData] = useState<Overview>({ activeRides: 0, availableDrivers: 0, completedRides: 0, grossBookingsMinor: 0, averageRating: null });
   const [paymentSettings, setPaymentSettings] = useState<PaymentSettings | null>(null);
+  const [report, setReport] = useState<OperationsReport | null>(null);
+  const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    const to = new Date();
+    const from = new Date(to.getTime() - 30 * 86_400_000);
     Promise.all([
       apiClient.request<{ data: Overview }>("/admin/overview"),
-      apiClient.request<{ data: PaymentSettings }>("/admin/settings/payments")
-    ]).then(([overview, settings]) => {
+      apiClient.request<{ data: PaymentSettings }>("/admin/settings/payments"),
+      apiClient.request<{ data: OperationsReport }>(`/reports/operations?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`),
+      apiClient.request<{ data: Promotion[] }>("/admin/promos")
+    ]).then(([overview, settings, operations, promoList]) => {
       setData(overview.data);
       setPaymentSettings(settings.data);
+      setReport(operations.data);
+      setPromotions(promoList.data);
     }).catch((requestError: Error) => setError(requestError.message));
   }, []);
 
@@ -60,6 +77,27 @@ function App() {
           </tbody></table>
           <p>Privileged changes write append-only audit records.</p>
         </div>
+      </section>
+      <section className="panel">
+        <span className="eyebrow">30-day report</span>
+        <h2>Ride and revenue performance</h2>
+        <div className="grid">
+          <Stat label="Completion rate" value={`${Math.round((report?.completionRate ?? 0) * 100)}%`} detail={`${report?.completedRides ?? 0} of ${report?.rides ?? 0} rides`} />
+          <Stat label="Driver earnings" value={money(report?.driverEarningsMinor ?? 0)} detail="88% allocation" />
+          <Stat label="Platform commission" value={money(report?.platformCommissionMinor ?? 0)} detail="12% allocation" />
+        </div>
+      </section>
+      <section className="panel">
+        <span className="eyebrow">Promotions</span>
+        <h2>Coupon performance</h2>
+        <table><thead><tr><th>Code</th><th>Description</th><th>Uses</th><th>Expires</th><th>Status</th></tr></thead>
+          <tbody>{promotions.map((promotion) => <tr key={promotion.id}>
+            <td><code>{promotion.code}</code></td><td>{promotion.description}</td>
+            <td>{promotion.uses}{promotion.maxUses ? ` / ${promotion.maxUses}` : ""}</td>
+            <td>{new Date(promotion.expiresAt).toLocaleDateString("en-LR")}</td>
+            <td>{promotion.active ? "Active" : "Inactive"}</td>
+          </tr>)}</tbody>
+        </table>
       </section>
       <section className="panel">
         <span className="eyebrow">Payment settings</span>

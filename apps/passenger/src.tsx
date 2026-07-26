@@ -12,6 +12,16 @@ type Quote = {
 };
 type PaymentMethod = "CASH" | "ORANGE_MONEY" | "MTN_MOMO" | "STRIPE";
 type MobileMoneyDisplay = { method: "ORANGE_MONEY" | "MTN_MOMO"; paymentNumber: string };
+type Ride = {
+  id: string;
+  status: string;
+  pickupAddress: string;
+  destinationAddress: string;
+  fareMinor: number;
+  requestedAt: string;
+  ratings: Array<{ score: number }>;
+};
+type Notification = { id: string; title: string; body: string; readAt: string | null };
 
 const locations = {
   pickup: { address: "Broad Street, Monrovia", latitude: 6.3156, longitude: -10.8074 },
@@ -24,6 +34,39 @@ function App() {
   const [promo, setPromo] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
   const [mobileMoney, setMobileMoney] = useState<MobileMoneyDisplay | null>(null);
+  const [rides, setRides] = useState<Ride[]>([]);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [unread, setUnread] = useState(0);
+  const [trackedRideId, setTrackedRideId] = useState<string | null>(null);
+  const [liveLocation, setLiveLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+
+  async function loadDashboard() {
+    if (!apiClient.hasSession()) return;
+    const [history, inbox] = await Promise.all([
+      apiClient.request<{ data: Ride[] }>("/rides?limit=10"),
+      apiClient.request<{ data: Notification[]; meta: { unread: number } }>("/notifications?limit=5")
+    ]);
+    setRides(history.data);
+    setNotifications(inbox.data);
+    setUnread(inbox.meta.unread);
+  }
+
+  useEffect(() => {
+    loadDashboard().catch((error: Error) => setMessage(error.message));
+  }, []);
+
+  useEffect(() => {
+    if (!trackedRideId || !apiClient.hasSession()) return;
+    const socket = apiClient.connect();
+    socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "ride.subscribe", rideId: trackedRideId })));
+    socket.addEventListener("message", (event) => {
+      const update = JSON.parse(event.data) as { type: string; latitude?: number; longitude?: number };
+      if (update.type === "driver.location" && update.latitude != null && update.longitude != null) {
+        setLiveLocation({ latitude: update.latitude, longitude: update.longitude });
+      }
+    });
+    return () => socket.close();
+  }, [trackedRideId]);
 
   useEffect(() => {
     if (paymentMethod !== "ORANGE_MONEY" && paymentMethod !== "MTN_MOMO") {
@@ -57,6 +100,18 @@ function App() {
         body: JSON.stringify({ ...locations, paymentMethod, promoCode: promo || undefined })
       });
       setMessage(`Ride ${response.data.id.slice(0, 8)} requested. Searching for a nearby driver.`);
+      setTrackedRideId(response.data.id);
+      await loadDashboard();
+    } catch (error) {
+      setMessage((error as Error).message);
+    }
+  }
+
+  async function rateRide(rideId: string, score: number) {
+    try {
+      await apiClient.request(`/rides/${rideId}/ratings`, { method: "POST", body: JSON.stringify({ score }) });
+      setMessage("Thanks for rating your ride.");
+      await loadDashboard();
     } catch (error) {
       setMessage((error as Error).message);
     }
@@ -101,9 +156,29 @@ function App() {
             </div>
           )}
         </div>
-        <Map />
+        <Map {...(liveLocation ?? {})} label={liveLocation ? "Live driver location" : "Pickup and destination"} />
       </section>
-      <section id="history"><h2>Your recent rides</h2><p>Authenticated ride history, receipts and ratings load from the ride history API.</p></section>
+      <section id="history" className="panel">
+        <div className="toolbar"><h2>Your recent rides</h2><span>{unread} unread notifications</span></div>
+        <table><thead><tr><th>Route</th><th>Status</th><th>Fare</th><th>Rating</th></tr></thead>
+          <tbody>{rides.map((ride) => (
+            <tr key={ride.id}>
+              <td>{ride.pickupAddress} → {ride.destinationAddress}</td>
+              <td><button className="link-button" onClick={() => setTrackedRideId(ride.id)}>{ride.status.replaceAll("_", " ")}</button></td>
+              <td>{money(ride.fareMinor)}</td>
+              <td>{ride.status === "COMPLETED" && !ride.ratings.length
+                ? <span className="rating-actions">{[1, 2, 3, 4, 5].map((score) => <button key={score} onClick={() => rateRide(ride.id, score)} aria-label={`Rate ${score} stars`}>★</button>)}</span>
+                : ride.ratings[0]?.score ?? "—"}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+        {!rides.length && <p>Sign in to view bookings and receipts.</p>}
+      </section>
+      <section className="panel">
+        <h2>Notifications</h2>
+        {notifications.map((notification) => <p key={notification.id}><strong>{notification.title}</strong><br />{notification.body}</p>)}
+        {!notifications.length && <p>No new notifications.</p>}
+      </section>
     </Shell>
   );
 }
