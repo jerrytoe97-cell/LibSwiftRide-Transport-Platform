@@ -18,6 +18,6 @@ Implemented foundation endpoints:
 | POST | `/payments/webhooks/:provider` | Signed provider request |
 | GET | `/admin/overview` | Admin |
 
-WebSocket endpoint `/ws?access_token=...` accepts location events from authenticated drivers and binds stored updates to the token subject. Before production use, move credentials to a short-lived socket ticket or supported authorization header, validate update frequency and service bounds, and distribute events across API replicas.
+WebSocket endpoint `/ws` accepts the access token through an `auth.<base64url-token>` WebSocket subprotocol, keeping credentials out of URLs and proxy access logs. Driver locations bind to the verified token subject, and ride subscriptions require participant or operations access. Production should use very short-lived socket tickets when the client platform supports them and Redis pub/sub across replicas.
 
 The `/openapi.json` endpoint is a placeholder document. Generate a complete contract from route schemas before public integration.

@@ -24,3 +24,5 @@ Rollback application artifacts first. Database rollback uses a reviewed correcti
 - RPO: 15 minutes; RTO: 60 minutes (validate through exercises).
 
 Alert on unavailable dependencies, elevated 5xx/401 rates, dispatch backlog, stale driver locations, unmatched payments, negative allocations and failed backups. Use correlation IDs across requests, jobs and provider calls.
+
+See [Monitoring](MONITORING.md), [Backups](BACKUPS.md), [Providers](PROVIDERS.md), and [KYC](KYC.md) for launch runbooks and control ownership.

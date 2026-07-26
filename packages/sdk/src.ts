@@ -5,11 +5,22 @@ const WS_URL = environment?.VITE_WS_URL ?? "ws://localhost:4000/ws";
 export type ApiError = { error: { code: string; message: string; details?: unknown } };
 
 export class LibSwiftRideClient {
-  constructor(private accessToken = sessionStorage.getItem("lsr_access_token") ?? "") {}
+  constructor(private accessToken = typeof sessionStorage === "undefined" ? "" : sessionStorage.getItem("lsr_access_token") ?? "") {}
 
   setAccessToken(token: string) {
     this.accessToken = token;
-    sessionStorage.setItem("lsr_access_token", token);
+    if (typeof sessionStorage !== "undefined") sessionStorage.setItem("lsr_access_token", token);
+  }
+
+  hasSession() {
+    return Boolean(this.accessToken);
+  }
+
+  async login(phone: string, password: string) {
+    const result = await this.request<{ tokens: { accessToken: string; refreshToken: string } }>("/auth/login", { method: "POST", body: JSON.stringify({ phone, password }) });
+    this.setAccessToken(result.tokens.accessToken);
+    if (typeof sessionStorage !== "undefined") sessionStorage.setItem("lsr_refresh_token", result.tokens.refreshToken);
+    return result;
   }
 
   async request<T>(path: string, init: RequestInit & { idempotencyKey?: string } = {}): Promise<T> {
@@ -25,7 +36,8 @@ export class LibSwiftRideClient {
 
   connect() {
     if (!this.accessToken) throw new Error("Sign in before connecting");
-    return new WebSocket(`${WS_URL}?access_token=${encodeURIComponent(this.accessToken)}`);
+    const encoded = btoa(this.accessToken).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+    return new WebSocket(WS_URL, ["libswiftride", `auth.${encoded}`]);
   }
 }
 

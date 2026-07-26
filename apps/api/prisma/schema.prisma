@@ -11,6 +11,7 @@ enum UserRole {
   PASSENGER
   DRIVER
   FLEET_MANAGER
+  DISPATCHER
   ADMIN
   SUPPORT
 }
@@ -80,10 +81,29 @@ enum NotificationStatus {
   READ
 }
 
+enum KycStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum KycDocumentType {
+  NATIONAL_ID
+  DRIVER_LICENSE
+  VEHICLE_REGISTRATION
+  INSURANCE
+  INSPECTION
+  PROFILE_PHOTO
+}
+
 model User {
   id           String     @id @default(uuid())
   phone        String     @unique
   email        String?    @unique
+  emailVerifiedAt DateTime?
   passwordHash String
   firstName    String
   lastName     String
@@ -98,6 +118,8 @@ model User {
   ratingsGiven Rating[]    @relation("RatingAuthor")
   ratingsReceived Rating[] @relation("RatingSubject")
   notifications Notification[]
+  kycReviews   KycCase[] @relation("KycReviewer")
+  devices      Device[]
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 }
@@ -152,6 +174,7 @@ model Driver {
   vehicle       Vehicle?
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
+  kycCase       KycCase?
 }
 
 model Vehicle {
@@ -308,6 +331,50 @@ model Notification {
   readAt    DateTime?
   createdAt DateTime           @default(now())
   @@index([userId, status, createdAt])
+}
+
+model Device {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform  String
+  pushToken String   @unique
+  active    Boolean  @default(true)
+  lastSeenAt DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([userId, active])
+}
+
+model KycCase {
+  id             String        @id @default(uuid())
+  driverId       String        @unique
+  driver         Driver        @relation(fields: [driverId], references: [id])
+  status         KycStatus     @default(DRAFT)
+  submittedAt    DateTime?
+  reviewedAt     DateTime?
+  reviewerId     String?
+  reviewer       User?         @relation("KycReviewer", fields: [reviewerId], references: [id])
+  rejectionCode  String?
+  rejectionNotes String?
+  documents      KycDocument[]
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  @@index([status, submittedAt])
+}
+
+model KycDocument {
+  id          String          @id @default(uuid())
+  kycCaseId   String
+  kycCase     KycCase         @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  type        KycDocumentType
+  storageKey  String
+  mimeType    String
+  checksum    String
+  expiresAt   DateTime?
+  verifiedAt  DateTime?
+  createdAt   DateTime        @default(now())
+  @@unique([kycCaseId, type])
 }
 
 model AuditLog {

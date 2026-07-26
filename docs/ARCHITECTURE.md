@@ -21,7 +21,7 @@ flowchart LR
 - **Mobility:** quotes, dispatch, ride state machine, GPS presence and trip events.
 - **Fleet:** drivers, vehicles, compliance and fleet ownership.
 - **Finance:** payment attempts, provider references, fare allocation and settlements.
-- **Operations:** admin metrics, support access, safety cases and audit logs.
+- **Operations:** dispatcher queue, admin metrics, reporting, KYC review, support access, safety cases and audit logs.
 
 The initial code is a modular monolith. This minimizes distributed failure modes while domain boundaries settle. High-volume location ingestion, dispatch and notification workers can be extracted behind event contracts later.
 

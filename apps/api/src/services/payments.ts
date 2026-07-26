@@ -1,5 +1,6 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { PaymentMethod } from "@prisma/client";
+import { config } from "../config.js";
 
 export type PaymentRequest = {
   amountMinor: number;
@@ -36,16 +37,31 @@ class SandboxMobileMoneyProvider implements PaymentProvider {
   async refund() {}
 }
 
-class StripeProvider implements PaymentProvider {
-  readonly method = "STRIPE" as const;
+class HookPaymentProvider implements PaymentProvider {
+  constructor(readonly method: "ORANGE_MONEY" | "MTN_MOMO" | "STRIPE", private url?: string, private token?: string) {}
   async createPayment(request: PaymentRequest) {
-    return {
-      providerRef: `stripe_${randomUUID()}`,
-      status: "PENDING" as const,
-      checkoutUrl: `${request.returnUrl ?? "https://example.invalid"}/payment/pending`
-    };
+    if (!this.url || !this.token) {
+      if (config.NODE_ENV === "production") throw new Error(`${this.method} credentials are not configured`);
+      return { providerRef: `${this.method.toLowerCase()}_${randomUUID()}`, status: "PENDING" as const };
+    }
+    const response = await fetch(this.url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json", "idempotency-key": request.idempotencyKey },
+      body: JSON.stringify({ ...request, method: this.method })
+    });
+    if (!response.ok) throw new Error(`${this.method} provider rejected the payment request`);
+    const result = await response.json() as PaymentResult;
+    if (!result.providerRef || !["PENDING", "AUTHORIZED", "CAPTURED"].includes(result.status)) throw new Error(`${this.method} provider returned an invalid response`);
+    return result;
   }
-  async refund() {}
+  async refund(providerRef: string, amountMinor: number) {
+    if (!this.url || !this.token) throw new Error(`${this.method} refund provider is not configured`);
+    const response = await fetch(`${this.url}/${encodeURIComponent(providerRef)}/refunds`, {
+      method: "POST", headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
+      body: JSON.stringify({ amountMinor })
+    });
+    if (!response.ok) throw new Error(`${this.method} refund failed`);
+  }
 }
 
 class CashProvider implements PaymentProvider {
@@ -57,9 +73,9 @@ class CashProvider implements PaymentProvider {
 }
 
 const providers: Partial<Record<PaymentMethod, PaymentProvider>> = {
-  ORANGE_MONEY: new SandboxMobileMoneyProvider("ORANGE_MONEY"),
-  MTN_MOMO: new SandboxMobileMoneyProvider("MTN_MOMO"),
-  STRIPE: new StripeProvider(),
+  ORANGE_MONEY: config.PAYMENT_PROVIDER === "sandbox" ? new SandboxMobileMoneyProvider("ORANGE_MONEY") : new HookPaymentProvider("ORANGE_MONEY", config.ORANGE_MONEY_API_URL, config.ORANGE_MONEY_API_TOKEN),
+  MTN_MOMO: config.PAYMENT_PROVIDER === "sandbox" ? new SandboxMobileMoneyProvider("MTN_MOMO") : new HookPaymentProvider("MTN_MOMO", config.MTN_MOMO_API_URL, config.MTN_MOMO_API_TOKEN),
+  STRIPE: config.PAYMENT_PROVIDER === "sandbox" ? new HookPaymentProvider("STRIPE") : new HookPaymentProvider("STRIPE", config.STRIPE_PAYMENT_HOOK_URL, config.STRIPE_API_TOKEN),
   CASH: new CashProvider()
 };
 

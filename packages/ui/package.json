@@ -9,10 +9,11 @@
     "build": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "test": "echo ui-tests-pending"
+    "test": "vitest run --passWithNoTests"
   },
   "devDependencies": {
     "@types/react": "^19.1.8",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
   }
 }

@@ -65,6 +65,10 @@ services:
     build: { context: ., dockerfile: Dockerfile.frontend, args: { APP: admin, VITE_API_URL: http://localhost:4000/api/v1, VITE_WS_URL: ws://localhost:4000/ws } }
     ports: ["3004:80"]
     depends_on: [api]
+  dispatcher:
+    build: { context: ., dockerfile: Dockerfile.frontend, args: { APP: dispatcher, VITE_API_URL: http://localhost:4000/api/v1, VITE_WS_URL: ws://localhost:4000/ws } }
+    ports: ["3005:80"]
+    depends_on: [api]
 
 volumes:
   postgres_data:

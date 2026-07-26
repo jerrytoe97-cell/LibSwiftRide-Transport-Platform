@@ -13,6 +13,7 @@ LibSwiftRide is an enterprise ride-hailing platform designed for Liberia. This r
 | Driver app | `apps/driver` | Availability, offers, navigation, trip lifecycle and earnings |
 | Fleet portal | `apps/fleet` | Vehicles, drivers, compliance, dispatch and settlements |
 | Admin dashboard | `apps/admin` | Operations, safety, pricing, users, payments and audit logs |
+| Dispatcher console | `apps/dispatcher` | Live ride queue, manual matching and trip intervention |
 | Platform API | `apps/api` | REST API, WebSocket GPS stream and background-ready domain services |
 
 ## Architecture
@@ -27,7 +28,7 @@ Key business rules are server-owned:
 - Ride and payment state changes are idempotent and auditable.
 - Payment providers are integrated behind an adapter; the included sandbox provider enables local development.
 
-See [Architecture](docs/ARCHITECTURE.md), [API](docs/API.md), [Security](docs/SECURITY.md), [Operations](docs/OPERATIONS.md), and [Gap analysis](docs/GAP_ANALYSIS.md).
+See [Architecture](docs/ARCHITECTURE.md), [API](docs/API.md), [Security](docs/SECURITY.md), [Operations](docs/OPERATIONS.md), [Monitoring](docs/MONITORING.md), [Backups](docs/BACKUPS.md), and the [production launch review](docs/LAUNCH_READINESS.md).
 
 ## Quick start
 
@@ -50,6 +51,7 @@ The default local endpoints are:
 - Driver: `http://localhost:3002`
 - Fleet: `http://localhost:3003`
 - Admin: `http://localhost:3004`
+- Dispatcher: `http://localhost:3005`
 - API and OpenAPI JSON: `http://localhost:4000/api/v1`, `http://localhost:4000/openapi.json`
 - Health checks: `http://localhost:4000/health/live`, `http://localhost:4000/health/ready`
 

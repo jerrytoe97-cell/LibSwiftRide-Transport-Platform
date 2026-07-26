@@ -3,7 +3,9 @@ import express, { type NextFunction, type Request, type Response } from "express
 import { rateLimit } from "express-rate-limit";
 import helmet from "helmet";
 import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
 import { pinoHttp } from "pino-http";
+import { collectDefaultMetrics, Counter, Histogram, register } from "prom-client";
 import { WebSocketServer } from "ws";
 import { ZodError } from "zod";
 import { api } from "./routes.js";
@@ -11,12 +13,26 @@ import { verifyAccessToken } from "./auth.js";
 import { config } from "./config.js";
 import { prisma, redis } from "./lib.js";
 import { updateDriverLocation } from "./services/dispatch.js";
+import { deliverPendingNotifications } from "./services/notifications.js";
+import { logger } from "./logger.js";
 
 const app = express();
+collectDefaultMetrics({ prefix: "libswiftride_" });
+const httpRequests = new Counter({ name: "libswiftride_http_requests_total", help: "HTTP requests", labelNames: ["method", "route", "status"] });
+const httpDuration = new Histogram({ name: "libswiftride_http_request_duration_seconds", help: "HTTP request duration", labelNames: ["method", "route", "status"], buckets: [.01, .05, .1, .25, .5, 1, 2, 5] });
 app.disable("x-powered-by");
 app.use(helmet());
 app.use(cors({ origin: config.corsOrigins, credentials: true }));
-app.use(pinoHttp({ redact: ["req.headers.authorization", "req.body.password", "res.headers.set-cookie"] }));
+app.use(pinoHttp({ logger, genReqId: (req, res) => { const id = String(req.headers["x-request-id"] ?? randomUUID()); res.setHeader("x-request-id", id); return id; }, redact: ["req.headers.authorization", "req.body.password", "res.headers.set-cookie"] }));
+app.use((req, res, next) => {
+  const end = httpDuration.startTimer();
+  res.on("finish", () => {
+    const labels = { method: req.method, route: req.route?.path ?? "unmatched", status: String(res.statusCode) };
+    httpRequests.inc(labels);
+    end(labels);
+  });
+  next();
+});
 app.use("/api", rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api/v1/auth", rateLimit({ windowMs: 15 * 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use(express.json({
@@ -29,6 +45,11 @@ app.get("/health/ready", async (_req, res) => {
     await prisma.$queryRaw`SELECT 1`;
     res.json({ status: "ready" });
   } catch { res.status(503).json({ status: "not_ready" }); }
+});
+app.get("/metrics", async (req, res) => {
+  if (config.METRICS_TOKEN && req.headers.authorization !== `Bearer ${config.METRICS_TOKEN}`) return res.status(401).send("Unauthorized");
+  res.setHeader("content-type", register.contentType);
+  res.send(await register.metrics());
 });
 app.get("/openapi.json", (_req, res) => res.json({ openapi: "3.1.0", info: { title: "LibSwiftRide API", version: "0.1.0" }, servers: [{ url: "/api/v1" }] }));
 app.use("/api/v1", api);
@@ -43,10 +64,13 @@ const server = createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 const rideSubscriptions = new Map<string, Set<import("ws").WebSocket>>();
 wss.on("connection", async (socket, request) => {
-  const token = new URL(request.url ?? "", "http://localhost").searchParams.get("access_token");
+  const protocols = String(request.headers["sec-websocket-protocol"] ?? "").split(",").map((value) => value.trim());
+  const encodedToken = protocols.find((value) => value.startsWith("auth."));
+  const token = encodedToken ? Buffer.from(encodedToken.slice(5), "base64url").toString() : null;
   if (!token) return socket.close(1008, "Authentication required");
   const user = await verifyAccessToken(token).catch(() => null);
   if (!user) return socket.close(1008, "Authentication required");
+  let lastLocationAt = 0;
   socket.on("message", async (payload) => {
     try {
       const event = JSON.parse(payload.toString());
@@ -60,6 +84,8 @@ wss.on("connection", async (socket, request) => {
         socket.send(JSON.stringify({ type: "ride.subscribed", rideId: event.rideId }));
       }
       if (event.type === "driver.location" && user.role === "DRIVER" && Number.isFinite(event.latitude) && Number.isFinite(event.longitude)) {
+        if (Date.now() - lastLocationAt < 1_000) throw new Error("Location update rate exceeded");
+        lastLocationAt = Date.now();
         if (event.latitude < -90 || event.latitude > 90 || event.longitude < -180 || event.longitude > 180) throw new Error("Location is outside valid bounds");
         const location = await updateDriverLocation(user.sub, event.latitude, event.longitude);
         const activeRide = await prisma.ride.findFirst({ where: { driverId: location.driverId, status: { in: ["DRIVER_ASSIGNED", "DRIVER_ARRIVING", "DRIVER_ARRIVED", "IN_PROGRESS"] } }, select: { id: true } });
@@ -81,10 +107,16 @@ wss.on("connection", async (socket, request) => {
 
 server.listen(config.API_PORT, async () => {
   await redis.connect().catch(() => undefined);
-  console.log(`LibSwiftRide API listening on ${config.API_PORT}`);
+  logger.info({ port: config.API_PORT }, "API listening");
 });
 
+const notificationTimer = setInterval(() => {
+  deliverPendingNotifications().catch((error) => logger.error({ err: error }, "notification delivery cycle failed"));
+}, 5_000);
+notificationTimer.unref();
+
 async function shutdown() {
+  clearInterval(notificationTimer);
   server.close();
   await Promise.allSettled([prisma.$disconnect(), redis.quit()]);
 }

@@ -36,7 +36,7 @@ export async function matchDriver(rideId: string) {
       continue;
     }
     const assigned = await prisma.$transaction(async (tx) => {
-      const driver = await tx.driver.updateMany({ where: { id: driverId, status: "AVAILABLE" }, data: { status: "ON_TRIP" } });
+      const driver = await tx.driver.updateMany({ where: { id: driverId, status: "AVAILABLE", verifiedAt: { not: null }, vehicle: { active: true } }, data: { status: "ON_TRIP" } });
       if (!driver.count) return null;
       const claimed = await tx.ride.updateMany({ where: { id: ride.id, status: "SEARCHING", driverId: null }, data: { driverId, status: "DRIVER_ASSIGNED" } });
       if (!claimed.count) {

@@ -20,12 +20,12 @@ This foundation is not a claim that an unconfigured greenfield platform can safe
 
 | Priority | Missing capability |
 | --- | --- |
-| P0 | Authenticated GPS sockets, full ride state machine, transactional dispatch and race handling |
+| P0 | Multi-replica GPS fan-out, production load testing and dispatch race simulation |
 | P0 | Real map/geocoding/routing provider and Liberia coverage validation |
-| P0 | Approved mobile-money/card/cash integrations, refunds and daily reconciliation |
+| P0 | Provider-certified mobile-money/card integrations and daily reconciliation evidence |
 | P0 | Double-entry ledger, driver/fleet settlements, tips, promotions and dispute handling |
-| P0 | Driver KYC, vehicle documents, safety incidents, emergency workflows and support tooling |
-| P0 | Complete OpenAPI contract, integration/e2e tests, load tests and security review |
+| P0 | KYC object storage/provider configuration, safety incidents and emergency workflows |
+| P0 | Complete generated OpenAPI contract, browser/device e2e tests, load tests and security review |
 | P0 | Cloud target, managed secrets, TLS/DNS, backups/PITR, observability and on-call |
 | P1 | Native or installable mobile packaging, offline/poor-network behavior and push notifications |
 | P1 | PostGIS dispatch search, matching strategy, surge/zone governance and scheduled rides |
