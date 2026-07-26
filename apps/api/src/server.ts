@@ -23,7 +23,7 @@ const httpDuration = new Histogram({ name: "libswiftride_http_request_duration_s
 app.disable("x-powered-by");
 app.use(helmet());
 app.use(cors({ origin: config.corsOrigins, credentials: true }));
-app.use(pinoHttp({ logger, genReqId: (req, res) => { const id = String(req.headers["x-request-id"] ?? randomUUID()); res.setHeader("x-request-id", id); return id; }, redact: ["req.headers.authorization", "req.body.password", "res.headers.set-cookie"] }));
+app.use(pinoHttp({ logger, genReqId: (req, res) => { const id = String(req.headers["x-request-id"] ?? randomUUID()); res.setHeader("x-request-id", id); return id; }, redact: ["req.headers.authorization", "req.body.password", "req.body.phone", "req.body.paymentNumber", "res.headers.set-cookie"] }));
 app.use((req, res, next) => {
   const end = httpDuration.startTimer();
   res.on("finish", () => {
@@ -42,8 +42,8 @@ app.use(express.json({
 app.get("/health/live", (_req, res) => res.json({ status: "ok" }));
 app.get("/health/ready", async (_req, res) => {
   try {
-    await prisma.$queryRaw`SELECT 1`;
-    res.json({ status: "ready" });
+    await Promise.all([prisma.$queryRaw`SELECT 1`, redis.ping()]);
+    res.json({ status: "ready", dependencies: { postgres: "ok", redis: "ok" } });
   } catch { res.status(503).json({ status: "not_ready" }); }
 });
 app.get("/metrics", async (req, res) => {

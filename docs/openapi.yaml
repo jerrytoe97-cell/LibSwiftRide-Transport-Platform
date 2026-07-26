@@ -101,6 +101,18 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         "201": { description: Payment created }
+  /payments/mobile-money/{method}/display:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Display the selected Mobile Money recipient to an authenticated passenger
+      parameters:
+        - in: path
+          name: method
+          required: true
+          schema: { type: string, enum: [ORANGE_MONEY, MTN_MOMO] }
+      responses:
+        "200": { description: Selected Mobile Money display configuration }
+        "503": { description: Selected destination is not configured }
   /wallet:
     get:
       security: [{ bearerAuth: [] }]
@@ -116,3 +128,8 @@ paths:
       security: [{ bearerAuth: [] }]
       summary: Read operational analytics
       responses: { "200": { description: Analytics overview } }
+  /admin/settings/payments:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Read payment configuration status without account-number values
+      responses: { "200": { description: Payment configuration status } }

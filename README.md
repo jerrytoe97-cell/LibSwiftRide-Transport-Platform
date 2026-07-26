@@ -28,7 +28,7 @@ Key business rules are server-owned:
 - Ride and payment state changes are idempotent and auditable.
 - Payment providers are integrated behind an adapter; the included sandbox provider enables local development.
 
-See [Architecture](docs/ARCHITECTURE.md), [API](docs/API.md), [Security](docs/SECURITY.md), [Operations](docs/OPERATIONS.md), [Monitoring](docs/MONITORING.md), [Backups](docs/BACKUPS.md), and the [production launch review](docs/LAUNCH_READINESS.md).
+See [Architecture](docs/ARCHITECTURE.md), [API](docs/API.md), [Security](docs/SECURITY.md), [Operations](docs/OPERATIONS.md), [Monitoring](docs/MONITORING.md), [Backups](docs/BACKUPS.md), [Incident response](docs/INCIDENT_RESPONSE.md), the [staging checklist](STAGING_CHECKLIST.md), and the [launch-readiness report](docs/LAUNCH_READINESS.md).
 
 ## Quick start
 
@@ -72,19 +72,19 @@ pnpm compose:up      # full container stack
 
 ## Configuration
 
-Copy `.env.example` to `.env`. At minimum, replace JWT secrets and configure a real payment provider before any shared environment. CORS origins, database URLs, cookie settings and payment webhook secrets are environment-specific.
+Copy `.env.example` to `.env`. At minimum, replace JWT secrets. External payment methods remain disabled unless `PAYMENTS_ENABLED=true`; only enable them after official credentials and staging certification. CORS origins, database URLs, metrics access and payment webhook secrets are environment-specific.
 
 Liberia defaults use `Africa/Monrovia`, `LRD`, and an initial Monrovia service area. Pricing in this foundation is illustrative and must be approved by operations before launch.
 
 ## Delivery and governance
 
-CI validates formatting, types, tests, builds, dependency integrity and container builds. The deployment workflow is deliberately a documented template: production cloud, registry, secret manager, DNS, TLS, backups and approval gates must be selected before enabling it.
+CI validates types, tests, builds, dependency integrity and container builds. The deployment workflow calls a protected Render deploy hook and refuses to run when that environment secret is absent.
 
 Changes should enter through feature branches and pull requests. Read [AGENTS.md](AGENTS.md) before automated work. Do not commit secrets, raw identity documents, payment card data, or unrestricted location histories.
 
 ## Render
 
-[`render.yaml`](render.yaml) defines PostgreSQL, Redis, the API, and five independently deployed web applications. Create a Render Blueprint, set the frontend API/WebSocket URLs and exact CORS origins, replace sandbox payment configuration, then deploy first to staging. Database migrations run as the API pre-deploy command. See [deployment documentation](docs/DEPLOYMENT.md).
+[`render.yaml`](render.yaml) defines PostgreSQL, Redis, the API, and six independently deployed web applications. Create a Render Blueprint, set the frontend API/WebSocket URLs and exact CORS origins, and deploy first to staging. External payments stay disabled until official provider credentials are supplied and certified. Database migrations run as the API pre-deploy command. See [deployment documentation](docs/DEPLOYMENT.md).
 
 ## License
 

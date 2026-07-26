@@ -80,6 +80,9 @@ const providers: Partial<Record<PaymentMethod, PaymentProvider>> = {
 };
 
 export function paymentProvider(method: PaymentMethod) {
+  if (method !== "CASH" && !config.PAYMENTS_ENABLED) {
+    throw new Error(`Payment method ${method} is disabled`);
+  }
   const provider = providers[method];
   if (!provider) throw new Error(`Payment method ${method} is not configured`);
   return provider;

@@ -15,8 +15,10 @@ Implemented foundation endpoints:
 | GET | `/rides/:id` | Ride participant, support or admin |
 | POST | `/rides/:id/complete` | Assigned driver or admin |
 | GET | `/drivers/me/earnings` | Driver |
+| GET | `/payments/mobile-money/:method/display` | Passenger; intentionally returns only the selected payment number |
 | POST | `/payments/webhooks/:provider` | Signed provider request |
 | GET | `/admin/overview` | Admin |
+| GET | `/admin/settings/payments` | Admin; returns configuration status, never account numbers |
 
 WebSocket endpoint `/ws` accepts the access token through an `auth.<base64url-token>` WebSocket subprotocol, keeping credentials out of URLs and proxy access logs. Driver locations bind to the verified token subject, and ride subscriptions require participant or operations access. Production should use very short-lived socket tickets when the client platform supports them and Redis pub/sub across replicas.
 

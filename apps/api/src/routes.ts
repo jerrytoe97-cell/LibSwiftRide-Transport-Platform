@@ -8,6 +8,7 @@ import { writeAudit } from "./services/audit.js";
 import { matchDriver } from "./services/dispatch.js";
 import { calculateFare } from "./services/fare.js";
 import { markNotificationRead, queueNotification } from "./services/notifications.js";
+import { adminPaymentConfiguration, mobileMoneyDisplayNumber } from "./services/payment-settings.js";
 import { paymentProvider, verifyWebhookSignature } from "./services/payments.js";
 import { assertTransition, type RideState } from "./services/ride-state.js";
 import { logger } from "./logger.js";
@@ -115,6 +116,17 @@ const location = z.object({
   longitude: z.number().min(-180).max(180)
 });
 const quoteInput = z.object({ pickup: location, destination: location });
+const mobileMoneyMethod = z.enum(["ORANGE_MONEY", "MTN_MOMO"]);
+
+api.get("/payments/mobile-money/:method/display", authenticate, authorize("PASSENGER"), asyncRoute(async (req, res) => {
+  const method = mobileMoneyMethod.parse(req.params.method);
+  const paymentNumber = mobileMoneyDisplayNumber(method);
+  if (!paymentNumber) {
+    return res.status(503).json({ error: { code: "PAYMENT_DESTINATION_UNAVAILABLE", message: "This Mobile Money destination is not configured" } });
+  }
+  res.setHeader("cache-control", "private, no-store");
+  res.json({ data: { method, paymentNumber } });
+}));
 
 api.post("/rides/quote", authenticate, asyncRoute(async (req, res) => {
   const input = quoteInput.extend({ promoCode: z.string().optional() }).parse(req.body);
@@ -371,4 +383,9 @@ api.get("/admin/overview", authenticate, authorize("ADMIN"), asyncRoute(async (_
     prisma.rating.aggregate({ _avg: { score: true } })
   ]);
   res.json({ data: { activeRides, availableDrivers, completedRides, users, averageRating: ratings._avg.score, grossBookingsMinor: captured._sum.amountMinor ?? 0, currency: "LRD" } });
+}));
+
+api.get("/admin/settings/payments", authenticate, authorize("ADMIN"), asyncRoute(async (_req, res) => {
+  res.setHeader("cache-control", "private, no-store");
+  res.json({ data: adminPaymentConfiguration() });
 }));
