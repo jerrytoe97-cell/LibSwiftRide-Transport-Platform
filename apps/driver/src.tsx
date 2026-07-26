@@ -8,10 +8,14 @@ type ActiveRide = { id: string; status: string; pickupAddress: string; destinati
 type Dashboard = {
   driver: { status: string; verifiedAt: string | null; kycStatus: string | null; vehicle: { plateNumber: string } | null };
   earnings: { driverEarningsMinor: number; completedRides: number; currency: string };
+  wallet: { balanceMinor: number; currency: string };
+  performance: { completedRides: number; cancelledRides: number; completionRate: number };
   rating: { average: number | null; count: number };
   activeRide: ActiveRide | null;
   unreadNotifications: number;
 };
+type AvailabilityWindow = { id: string; startsAt: string; endsAt: string };
+type RideHistory = { id: string; status: string; pickupAddress: string; destinationAddress: string; driverEarningsMinor: number; completedAt: string | null };
 
 const nextStatus: Record<string, string> = {
   DRIVER_ASSIGNED: "DRIVER_ARRIVING",
@@ -24,14 +28,29 @@ function App() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [message, setMessage] = useState("Sign in to load your driver profile.");
   const [coords, setCoords] = useState({ latitude: 6.3156, longitude: -10.8074 });
+  const [schedule, setSchedule] = useState<AvailabilityWindow[]>([]);
+  const [history, setHistory] = useState<RideHistory[]>([]);
+  const [startsAt, setStartsAt] = useState("");
+  const [endsAt, setEndsAt] = useState("");
   const socket = useRef<WebSocket | null>(null);
   const watchId = useRef<number | null>(null);
 
   async function load() {
     if (!apiClient.hasSession()) return;
-    const response = await apiClient.request<{ data: Dashboard }>("/drivers/me/dashboard");
-    setDashboard(response.data);
+    const [response, windows, rides] = await Promise.all([
+      apiClient.request<{ data: Dashboard }>("/drivers/me/dashboard"),
+      apiClient.request<{ data: AvailabilityWindow[] }>("/drivers/me/availability-schedule"),
+      apiClient.request<{ data: RideHistory[] }>("/rides?limit=10")
+    ]);
+    setDashboard(response.data); setSchedule(windows.data); setHistory(rides.data);
     setMessage("");
+  }
+
+  async function addAvailability() {
+    try {
+      await apiClient.request("/drivers/me/availability-schedule", { method: "POST", body: JSON.stringify({ startsAt, endsAt }) });
+      setStartsAt(""); setEndsAt(""); await load();
+    } catch (error) { setMessage((error as Error).message); }
   }
 
   useEffect(() => {
@@ -90,7 +109,7 @@ function App() {
       {message && <p className="notice">{message}</p>}
       <div className="grid">
         <Stat label="Lifetime earnings" value={money(dashboard?.earnings.driverEarningsMinor ?? 0)} detail={`${dashboard?.earnings.completedRides ?? 0} completed rides`} />
-        <Stat label="Your fare share" value="88%" detail="settled to your wallet" />
+        <Stat label="Wallet balance" value={money(dashboard?.wallet.balanceMinor ?? 0)} detail="Available ledger balance" />
         <Stat label="Rating" value={dashboard?.rating.average?.toFixed(2) ?? "—"} detail={`${dashboard?.rating.count ?? 0} reviews`} />
       </div>
       <section className="hero">
@@ -106,6 +125,16 @@ function App() {
           <p>Verification: {dashboard?.driver.kycStatus ?? "not started"} · Vehicle: {dashboard?.driver.vehicle?.plateNumber ?? "not assigned"}</p>
           <p>{dashboard?.unreadNotifications ?? 0} unread notifications</p>
         </div>
+      </section>
+      <section className="panel">
+        <h2>Availability schedule</h2>
+        <div className="form-row"><label>Start<input type="datetime-local" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label><label>End<input type="datetime-local" value={endsAt} onChange={(event) => setEndsAt(event.target.value)} /></label></div>
+        <Action onClick={addAvailability}>Add availability</Action>
+        {schedule.map((window) => <p key={window.id}>{new Date(window.startsAt).toLocaleString("en-LR")} – {new Date(window.endsAt).toLocaleString("en-LR")}</p>)}
+      </section>
+      <section className="panel">
+        <div className="toolbar"><h2>Performance and ride history</h2><strong>{Math.round((dashboard?.performance.completionRate ?? 0) * 100)}% completion</strong></div>
+        <table><thead><tr><th>Route</th><th>Status</th><th>Earnings</th></tr></thead><tbody>{history.map((ride) => <tr key={ride.id}><td>{ride.pickupAddress} → {ride.destinationAddress}</td><td>{ride.status.replaceAll("_", " ")}</td><td>{money(ride.driverEarningsMinor)}</td></tr>)}</tbody></table>
       </section>
     </Shell>
   );

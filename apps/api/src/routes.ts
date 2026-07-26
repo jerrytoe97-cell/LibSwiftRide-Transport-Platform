@@ -3,7 +3,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { authenticate, authorize, hashPassword, issueTokens, revokeRefreshToken, rotateRefreshToken, verifyPassword } from "./auth.js";
 import { config } from "./config.js";
-import { prisma } from "./lib.js";
+import { prisma, redis } from "./lib.js";
 import { writeAudit } from "./services/audit.js";
 import { matchDriver } from "./services/dispatch.js";
 import { calculateFare, calculatePromoDiscount } from "./services/fare.js";
@@ -11,6 +11,7 @@ import { markNotificationRead, queueNotification } from "./services/notification
 import { adminPaymentConfiguration, mobileMoneyDisplayNumber } from "./services/payment-settings.js";
 import { paymentProvider, verifyWebhookSignature } from "./services/payments.js";
 import { assertTransition, type RideState } from "./services/ride-state.js";
+import { validateAvailabilityWindow, validateRideSchedule } from "./services/scheduling.js";
 import { logger } from "./logger.js";
 
 export const api = Router();
@@ -57,6 +58,18 @@ api.post("/auth/refresh", asyncRoute(async (req, res) => {
 api.post("/auth/logout", asyncRoute(async (req, res) => {
   const token = z.object({ refreshToken: z.string().min(20) }).parse(req.body).refreshToken;
   await revokeRefreshToken(token);
+  res.status(204).send();
+}));
+
+api.get("/auth/sessions", authenticate, asyncRoute(async (req, res) => {
+  const sessions = await prisma.refreshToken.findMany({ where: { userId: req.user!.sub, revokedAt: null, expiresAt: { gt: new Date() } }, select: { id: true, createdAt: true, expiresAt: true }, orderBy: { createdAt: "desc" } });
+  res.json({ data: sessions });
+}));
+
+api.delete("/auth/sessions/:id", authenticate, asyncRoute(async (req, res) => {
+  const revoked = await prisma.refreshToken.updateMany({ where: { id: req.params.id, userId: req.user!.sub, revokedAt: null }, data: { revokedAt: new Date() } });
+  if (!revoked.count) return res.status(404).json({ error: { code: "SESSION_NOT_FOUND", message: "Session not found" } });
+  await writeAudit({ actorId: req.user!.sub, action: "SESSION_REVOKED", entityType: "RefreshToken", entityId: req.params.id, ipAddress: req.ip });
   res.status(204).send();
 }));
 
@@ -135,7 +148,14 @@ api.post("/rides/quote", authenticate, asyncRoute(async (req, res) => {
 }));
 
 api.post("/rides", authenticate, authorize("PASSENGER"), asyncRoute(async (req, res) => {
-  const input = quoteInput.extend({ paymentMethod: z.enum(["CASH", "ORANGE_MONEY", "MTN_MOMO", "STRIPE", "WALLET"]).default("CASH"), promoCode: z.string().optional() }).parse(req.body);
+  const input = quoteInput.extend({
+    paymentMethod: z.enum(["CASH", "ORANGE_MONEY", "MTN_MOMO", "STRIPE", "WALLET"]).default("CASH"),
+    promoCode: z.string().optional(),
+    scheduledFor: z.coerce.date().optional()
+  }).parse(req.body);
+  if (input.scheduledFor && !validateRideSchedule(input.scheduledFor)) {
+    return res.status(422).json({ error: { code: "INVALID_SCHEDULE", message: "Scheduled rides must be 15 minutes to 30 days in advance" } });
+  }
   const idempotencyKey = z.string().min(8).parse(req.header("idempotency-key"));
   const replay = await prisma.ride.findUnique({ where: { passengerId_idempotencyKey: { passengerId: req.user!.sub, idempotencyKey } } });
   if (replay) return res.json({ data: replay });
@@ -146,15 +166,16 @@ api.post("/rides", authenticate, authorize("PASSENGER"), asyncRoute(async (req, 
     where: { passengerId_idempotencyKey: { passengerId: req.user!.sub, idempotencyKey } },
     update: {},
     create: {
-      passengerId: req.user!.sub, idempotencyKey, status: "SEARCHING",
+      passengerId: req.user!.sub, idempotencyKey, status: input.scheduledFor ? "REQUESTED" : "SEARCHING",
       pickupAddress: input.pickup.address, pickupLatitude: input.pickup.latitude, pickupLongitude: input.pickup.longitude,
       destinationAddress: input.destination.address, destinationLatitude: input.destination.latitude,
       destinationLongitude: input.destination.longitude, paymentMethod: input.paymentMethod, ...(promo ? { promoCodeId: promo.id } : {}), ...pricing,
-      events: { create: { type: "RIDE_REQUESTED", actorId: req.user!.sub } }
+      ...(input.scheduledFor ? { scheduledFor: input.scheduledFor } : {}),
+      events: { create: { type: input.scheduledFor ? "RIDE_SCHEDULED" : "RIDE_REQUESTED", actorId: req.user!.sub } }
     }
   });
   if (promo) await prisma.promoCode.update({ where: { id: promo.id }, data: { uses: { increment: 1 } } });
-  void matchDriver(ride.id).catch((error) => logger.error({ err: error, rideId: ride.id }, "automatic matching failed"));
+  if (!input.scheduledFor) void matchDriver(ride.id).catch((error) => logger.error({ err: error, rideId: ride.id }, "automatic matching failed"));
   res.status(201).json({ data: ride });
 }));
 
@@ -199,6 +220,20 @@ api.get("/rides/:id", authenticate, asyncRoute(async (req, res) => {
   res.json({ data: ride });
 }));
 
+api.get("/rides/:id/receipt", authenticate, asyncRoute(async (req, res) => {
+  const ride = await prisma.ride.findUnique({ where: { id: req.params.id }, include: { driver: { include: { user: { select: { firstName: true, lastName: true } }, vehicle: { select: { make: true, model: true, plateNumber: true } } } }, payment: true, promoCode: { select: { code: true } } } });
+  if (!ride || ride.status !== "COMPLETED") return res.status(404).json({ error: { code: "RECEIPT_NOT_FOUND", message: "Completed ride receipt not found" } });
+  const participant = ride.passengerId === req.user!.sub || ride.driver?.userId === req.user!.sub;
+  if (!participant && !["ADMIN", "SUPPORT"].includes(req.user!.role)) return res.status(403).json({ error: { code: "FORBIDDEN", message: "Receipt access denied" } });
+  res.json({ data: {
+    receiptNumber: `LSR-${ride.id.slice(0, 8).toUpperCase()}`, rideId: ride.id, completedAt: ride.completedAt,
+    route: { pickup: ride.pickupAddress, destination: ride.destinationAddress },
+    fare: { subtotalMinor: ride.fareMinor + ride.discountMinor, discountMinor: ride.discountMinor, totalMinor: ride.fareMinor, driverEarningsMinor: ride.driverEarningsMinor, companyCommissionMinor: ride.companyCommissionMinor, currency: ride.currency },
+    payment: ride.payment ? { method: ride.payment.method, status: ride.payment.status } : { method: ride.paymentMethod, status: ride.paymentMethod === "CASH" ? "AUTHORIZED" : "PENDING" },
+    promoCode: ride.promoCode?.code ?? null, driver: ride.driver ? { name: `${ride.driver.user.firstName} ${ride.driver.user.lastName}`, vehicle: ride.driver.vehicle } : null
+  } });
+}));
+
 api.post("/rides/:id/transitions", authenticate, authorize("PASSENGER", "DRIVER", "ADMIN", "SUPPORT"), asyncRoute(async (req, res) => {
   const { status } = z.object({ status: z.enum(["SEARCHING", "DRIVER_ARRIVING", "DRIVER_ARRIVED", "IN_PROGRESS", "COMPLETED", "CANCELLED"]) }).parse(req.body);
   const ride = await prisma.ride.findUnique({ where: { id: req.params.id }, include: { driver: true } });
@@ -227,13 +262,29 @@ api.post("/rides/:id/ratings", authenticate, asyncRoute(async (req, res) => {
   const subjectId = ride.passengerId === req.user!.sub ? ride.driver.userId : ride.driver.userId === req.user!.sub ? ride.passengerId : null;
   if (!subjectId) return res.status(403).json({ error: { code: "FORBIDDEN", message: "Only ride participants can rate" } });
   const { comment, ...ratingInput } = input;
-  const rating = await prisma.rating.create({ data: { rideId: ride.id, authorId: req.user!.sub, subjectId, ...ratingInput, ...(comment ? { comment } : {}) } });
+  const rating = await prisma.rating.create({ data: { rideId: ride.id, authorId: req.user!.sub, subjectId, ...ratingInput, ...(comment ? { comment, status: "PENDING" } : {}) } });
   res.status(201).json({ data: rating });
 }));
 
 api.get("/wallet", authenticate, asyncRoute(async (req, res) => {
   const wallet = await prisma.wallet.upsert({ where: { userId: req.user!.sub }, update: {}, create: { userId: req.user!.sub }, include: { transactions: { orderBy: { createdAt: "desc" }, take: 50 } } });
   res.json({ data: wallet });
+}));
+
+api.get("/favourite-places", authenticate, authorize("PASSENGER"), asyncRoute(async (req, res) => {
+  res.json({ data: await prisma.favouritePlace.findMany({ where: { userId: req.user!.sub }, orderBy: [{ type: "asc" }, { label: "asc" }] }) });
+}));
+
+api.post("/favourite-places", authenticate, authorize("PASSENGER"), asyncRoute(async (req, res) => {
+  const input = z.object({ type: z.enum(["HOME", "WORK", "CUSTOM"]), label: z.string().trim().min(1).max(40), address: z.string().trim().min(3).max(240), latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180) }).parse(req.body);
+  const place = await prisma.favouritePlace.upsert({ where: { userId_label: { userId: req.user!.sub, label: input.label } }, update: input, create: { userId: req.user!.sub, ...input } });
+  res.status(201).json({ data: place });
+}));
+
+api.delete("/favourite-places/:id", authenticate, authorize("PASSENGER"), asyncRoute(async (req, res) => {
+  const removed = await prisma.favouritePlace.deleteMany({ where: { id: req.params.id, userId: req.user!.sub } });
+  if (!removed.count) return res.status(404).json({ error: { code: "PLACE_NOT_FOUND", message: "Favourite place not found" } });
+  res.status(204).send();
 }));
 
 api.post("/rides/:id/payments", authenticate, asyncRoute(async (req, res) => {
@@ -348,7 +399,21 @@ api.get("/dispatch/drivers", authenticate, authorize("DISPATCHER", "ADMIN"), asy
     orderBy: { updatedAt: "asc" },
     take: 200
   });
-  res.json({ data: drivers });
+  const withLocations = await Promise.all(drivers.map(async (driver) => {
+    const raw = await redis.get(`driver:location:${driver.id}`);
+    return { ...driver, location: raw ? JSON.parse(raw) : null };
+  }));
+  res.json({ data: withLocations });
+}));
+
+api.patch("/dispatch/drivers/:id/status", authenticate, authorize("DISPATCHER", "ADMIN"), asyncRoute(async (req, res) => {
+  const status = z.object({ status: z.enum(["OFFLINE", "SUSPENDED"]) }).parse(req.body).status;
+  const existing = await prisma.driver.findUnique({ where: { id: req.params.id } });
+  if (!existing) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Driver not found" } });
+  if (existing.status === "ON_TRIP") return res.status(409).json({ error: { code: "ACTIVE_TRIP", message: "An active-trip driver cannot be changed" } });
+  const driver = await prisma.driver.update({ where: { id: existing.id }, data: { status } });
+  await writeAudit({ actorId: req.user!.sub, action: `DRIVER_${status}`, entityType: "Driver", entityId: driver.id, ipAddress: req.ip });
+  res.json({ data: { id: driver.id, status: driver.status } });
 }));
 
 api.post("/dispatch/rides/:id/assign", authenticate, authorize("DISPATCHER", "ADMIN"), asyncRoute(async (req, res) => {
@@ -385,6 +450,47 @@ api.get("/admin/promos", authenticate, authorize("ADMIN"), asyncRoute(async (req
   res.json({ data: promotions });
 }));
 
+api.patch("/admin/promos/:id", authenticate, authorize("ADMIN"), asyncRoute(async (req, res) => {
+  const input = z.object({ active: z.boolean().optional(), expiresAt: z.coerce.date().optional(), maxUses: z.number().int().positive().nullable().optional() }).refine((value) => Object.keys(value).length > 0, "At least one setting is required").parse(req.body);
+  const promo = await prisma.promoCode.update({ where: { id: req.params.id }, data: { ...(input.active != null ? { active: input.active } : {}), ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}), ...(input.maxUses !== undefined ? { maxUses: input.maxUses } : {}) } });
+  await writeAudit({ actorId: req.user!.sub, action: "PROMO_UPDATED", entityType: "PromoCode", entityId: promo.id, ipAddress: req.ip, metadata: { fields: Object.keys(input) } });
+  res.json({ data: promo });
+}));
+
+api.get("/admin/passengers", authenticate, authorize("ADMIN", "SUPPORT"), asyncRoute(async (req, res) => {
+  const status = z.enum(["PENDING", "ACTIVE", "SUSPENDED", "DEACTIVATED"]).optional().parse(req.query.status);
+  const search = z.string().trim().max(80).optional().parse(req.query.search);
+  const passengers = await prisma.user.findMany({
+    where: { role: "PASSENGER", ...(status ? { status } : {}), ...(search ? { OR: [{ firstName: { contains: search, mode: "insensitive" } }, { lastName: { contains: search, mode: "insensitive" } }, { phone: { contains: search } }] } : {}) },
+    select: { id: true, firstName: true, lastName: true, phone: true, email: true, status: true, createdAt: true, _count: { select: { rides: true, ratingsGiven: true } } },
+    orderBy: { createdAt: "desc" }, take: 100
+  });
+  res.json({ data: passengers });
+}));
+
+api.patch("/admin/passengers/:id/status", authenticate, authorize("ADMIN"), asyncRoute(async (req, res) => {
+  const status = z.object({ status: z.enum(["ACTIVE", "SUSPENDED", "DEACTIVATED"]) }).parse(req.body).status;
+  const passenger = await prisma.user.findFirst({ where: { id: req.params.id, role: "PASSENGER" } });
+  if (!passenger) return res.status(404).json({ error: { code: "PASSENGER_NOT_FOUND", message: "Passenger not found" } });
+  const updated = await prisma.user.update({ where: { id: passenger.id }, data: { status } });
+  if (status !== "ACTIVE") await prisma.refreshToken.updateMany({ where: { userId: passenger.id, revokedAt: null }, data: { revokedAt: new Date() } });
+  await writeAudit({ actorId: req.user!.sub, action: `PASSENGER_${status}`, entityType: "User", entityId: passenger.id, ipAddress: req.ip });
+  res.json({ data: { id: updated.id, status: updated.status } });
+}));
+
+api.get("/admin/reviews", authenticate, authorize("ADMIN", "SUPPORT"), asyncRoute(async (req, res) => {
+  const status = z.enum(["PENDING", "PUBLISHED", "HIDDEN"]).default("PENDING").parse(req.query.status);
+  const reviews = await prisma.rating.findMany({ where: { status }, include: { author: { select: { id: true, firstName: true, lastName: true } }, subject: { select: { id: true, firstName: true, lastName: true } }, ride: { select: { id: true, completedAt: true } } }, orderBy: { createdAt: "asc" }, take: 100 });
+  res.json({ data: reviews });
+}));
+
+api.patch("/admin/reviews/:id", authenticate, authorize("ADMIN"), asyncRoute(async (req, res) => {
+  const status = z.object({ status: z.enum(["PUBLISHED", "HIDDEN"]) }).parse(req.body).status;
+  const review = await prisma.rating.update({ where: { id: req.params.id }, data: { status, moderatedAt: new Date(), moderatedById: req.user!.sub } });
+  await writeAudit({ actorId: req.user!.sub, action: `REVIEW_${status}`, entityType: "Rating", entityId: review.id, ipAddress: req.ip });
+  res.json({ data: review });
+}));
+
 api.get("/drivers/me/earnings", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {
   const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub } });
   if (!driver) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Driver profile not found" } });
@@ -402,21 +508,48 @@ api.get("/drivers/me/dashboard", authenticate, authorize("DRIVER"), asyncRoute(a
     include: { vehicle: true, kycCase: true }
   });
   if (!driver) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Driver profile not found" } });
-  const [earnings, rating, activeRide, unreadNotifications] = await Promise.all([
+  const [earnings, cancelledRides, rating, activeRide, unreadNotifications, wallet] = await Promise.all([
     prisma.ride.aggregate({ where: { driverId: driver.id, status: "COMPLETED" }, _sum: { driverEarningsMinor: true }, _count: true }),
+    prisma.ride.count({ where: { driverId: driver.id, status: "CANCELLED" } }),
     prisma.rating.aggregate({ where: { subjectId: req.user!.sub }, _avg: { score: true }, _count: true }),
     prisma.ride.findFirst({ where: { driverId: driver.id, status: { in: ["DRIVER_ASSIGNED", "DRIVER_ARRIVING", "DRIVER_ARRIVED", "IN_PROGRESS"] } }, orderBy: { requestedAt: "desc" } }),
-    prisma.notification.count({ where: { userId: req.user!.sub, readAt: null } })
+    prisma.notification.count({ where: { userId: req.user!.sub, readAt: null } }),
+    prisma.wallet.upsert({ where: { userId: req.user!.sub }, update: {}, create: { userId: req.user!.sub }, select: { balanceMinor: true, currency: true } })
   ]);
   res.json({
     data: {
       driver: { id: driver.id, status: driver.status, verifiedAt: driver.verifiedAt, onboardingStep: driver.onboardingStep, kycStatus: driver.kycCase?.status ?? null, vehicle: driver.vehicle },
       earnings: { currency: "LRD", completedRides: earnings._count, driverEarningsMinor: earnings._sum.driverEarningsMinor ?? 0 },
+      performance: { completedRides: earnings._count, cancelledRides, completionRate: earnings._count + cancelledRides ? earnings._count / (earnings._count + cancelledRides) : 0 },
+      wallet,
       rating: { average: rating._avg.score, count: rating._count },
       activeRide,
       unreadNotifications
     }
   });
+}));
+
+api.get("/drivers/me/availability-schedule", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {
+  const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub }, select: { id: true } });
+  if (!driver) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Driver profile not found" } });
+  res.json({ data: await prisma.driverAvailability.findMany({ where: { driverId: driver.id, endsAt: { gte: new Date() }, active: true }, orderBy: { startsAt: "asc" }, take: 100 }) });
+}));
+
+api.post("/drivers/me/availability-schedule", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {
+  const input = z.object({ startsAt: z.coerce.date(), endsAt: z.coerce.date() }).refine((value) => validateAvailabilityWindow(value.startsAt, value.endsAt), "Availability must be a future window of 24 hours or less").parse(req.body);
+  const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub }, select: { id: true } });
+  if (!driver) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Driver profile not found" } });
+  const overlap = await prisma.driverAvailability.count({ where: { driverId: driver.id, active: true, startsAt: { lt: input.endsAt }, endsAt: { gt: input.startsAt } } });
+  if (overlap) return res.status(409).json({ error: { code: "AVAILABILITY_OVERLAP", message: "Availability windows cannot overlap" } });
+  res.status(201).json({ data: await prisma.driverAvailability.create({ data: { driverId: driver.id, ...input } }) });
+}));
+
+api.delete("/drivers/me/availability-schedule/:id", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {
+  const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub }, select: { id: true } });
+  if (!driver) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Driver profile not found" } });
+  const cancelled = await prisma.driverAvailability.updateMany({ where: { id: req.params.id, driverId: driver.id, startsAt: { gt: new Date() } }, data: { active: false } });
+  if (!cancelled.count) return res.status(404).json({ error: { code: "WINDOW_NOT_FOUND", message: "Future availability window not found" } });
+  res.status(204).send();
 }));
 
 api.post("/drivers/me/availability", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {

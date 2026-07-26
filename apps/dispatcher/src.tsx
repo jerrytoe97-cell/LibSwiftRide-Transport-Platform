@@ -5,7 +5,7 @@ import { Map, Shell, Stat } from "@libswiftride/ui";
 import "@libswiftride/ui/styles.css";
 
 type Ride = { id: string; status: string; pickupAddress: string; destinationAddress: string; fareMinor: number; requestedAt: string; passenger: { firstName: string; lastName: string }; driver?: { user: { firstName: string; lastName: string }; vehicle?: { plateNumber: string } } };
-type Driver = { id: string; user: { firstName: string; lastName: string }; vehicle: { make: string; model: string; plateNumber: string } | null };
+type Driver = { id: string; user: { firstName: string; lastName: string }; vehicle: { make: string; model: string; plateNumber: string } | null; location: { latitude: number; longitude: number; at: string } | null };
 
 function App() {
   const [rides, setRides] = useState<Ride[]>([]);
@@ -42,6 +42,13 @@ function App() {
     }
   }
 
+  async function setDriverStatus(driverId: string, status: "OFFLINE" | "SUSPENDED") {
+    try {
+      await apiClient.request(`/dispatch/drivers/${driverId}/status`, { method: "PATCH", body: JSON.stringify({ status }) });
+      await load();
+    } catch (requestError) { setError((requestError as Error).message); }
+  }
+
   const searching = rides.filter((ride) => ride.status === "SEARCHING").length;
   return (
     <Shell product="Dispatcher">
@@ -71,7 +78,11 @@ function App() {
             </tr>)}</tbody>
           </table>
         </div>
-        <Map label="Dispatcher service map" />
+        <div className="panel">
+          <Map {...(drivers.find((driver) => driver.location)?.location ?? {})} label="Live available driver map" />
+          <h2>Driver status</h2>
+          {drivers.map((driver) => <div className="toolbar" key={driver.id}><span>{driver.user.firstName} {driver.user.lastName} · {driver.location ? "GPS live" : "GPS stale"}</span><span><button className="link-button" onClick={() => setDriverStatus(driver.id, "OFFLINE")}>Set offline</button> · <button className="link-button" onClick={() => setDriverStatus(driver.id, "SUSPENDED")}>Suspend</button></span></div>)}
+        </div>
       </section>
     </Shell>
   );

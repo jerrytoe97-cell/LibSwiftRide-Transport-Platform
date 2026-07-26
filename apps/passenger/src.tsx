@@ -6,6 +6,8 @@ import "@libswiftride/ui/styles.css";
 
 type Quote = {
   fareMinor: number;
+  subtotalMinor: number;
+  discountMinor: number;
   driverEarningsMinor: number;
   companyCommissionMinor: number;
   estimatedDurationSec: number;
@@ -20,8 +22,10 @@ type Ride = {
   fareMinor: number;
   requestedAt: string;
   ratings: Array<{ score: number }>;
+  scheduledFor?: string | null;
 };
 type Notification = { id: string; title: string; body: string; readAt: string | null };
+type FavouritePlace = { id: string; type: "HOME" | "WORK" | "CUSTOM"; label: string; address: string; latitude: number; longitude: number };
 
 const locations = {
   pickup: { address: "Broad Street, Monrovia", latitude: 6.3156, longitude: -10.8074 },
@@ -39,16 +43,21 @@ function App() {
   const [unread, setUnread] = useState(0);
   const [trackedRideId, setTrackedRideId] = useState<string | null>(null);
   const [liveLocation, setLiveLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [favourites, setFavourites] = useState<FavouritePlace[]>([]);
+  const [scheduledFor, setScheduledFor] = useState("");
+  const [receipt, setReceipt] = useState<{ receiptNumber: string; fare: { subtotalMinor: number; discountMinor: number; totalMinor: number; currency: string } } | null>(null);
 
   async function loadDashboard() {
     if (!apiClient.hasSession()) return;
-    const [history, inbox] = await Promise.all([
+    const [history, inbox, places] = await Promise.all([
       apiClient.request<{ data: Ride[] }>("/rides?limit=10"),
-      apiClient.request<{ data: Notification[]; meta: { unread: number } }>("/notifications?limit=5")
+      apiClient.request<{ data: Notification[]; meta: { unread: number } }>("/notifications?limit=5"),
+      apiClient.request<{ data: FavouritePlace[] }>("/favourite-places")
     ]);
     setRides(history.data);
     setNotifications(inbox.data);
     setUnread(inbox.meta.unread);
+    setFavourites(places.data);
   }
 
   useEffect(() => {
@@ -97,11 +106,29 @@ function App() {
       const response = await apiClient.request<{ data: { id: string } }>("/rides", {
         method: "POST",
         idempotencyKey: crypto.randomUUID(),
-        body: JSON.stringify({ ...locations, paymentMethod, promoCode: promo || undefined })
+        body: JSON.stringify({ ...locations, paymentMethod, promoCode: promo || undefined, scheduledFor: scheduledFor || undefined })
       });
       setMessage(`Ride ${response.data.id.slice(0, 8)} requested. Searching for a nearby driver.`);
       setTrackedRideId(response.data.id);
       await loadDashboard();
+    } catch (error) {
+      setMessage((error as Error).message);
+    }
+  }
+
+  async function saveFavourite(type: FavouritePlace["type"], label: string, place: typeof locations.pickup) {
+    try {
+      await apiClient.request("/favourite-places", { method: "POST", body: JSON.stringify({ type, label, ...place }) });
+      await loadDashboard();
+    } catch (error) {
+      setMessage((error as Error).message);
+    }
+  }
+
+  async function loadReceipt(rideId: string) {
+    try {
+      const response = await apiClient.request<{ data: typeof receipt }>(`/rides/${rideId}/receipt`);
+      setReceipt(response.data);
     } catch (error) {
       setMessage((error as Error).message);
     }
@@ -129,6 +156,11 @@ function App() {
           <label>Pickup<input value={locations.pickup.address} readOnly /></label>
           <label>Destination<input value={locations.destination.address} readOnly /></label>
           <label>Promo code<input value={promo} onChange={(event) => setPromo(event.target.value)} placeholder="Optional" /></label>
+          <label>Schedule for later<input type="datetime-local" value={scheduledFor} onChange={(event) => setScheduledFor(event.target.value)} /></label>
+          <div className="toolbar">
+            <button className="link-button" onClick={() => saveFavourite("HOME", "Home", locations.pickup)}>Save pickup as Home</button>
+            <button className="link-button" onClick={() => saveFavourite("WORK", "Work", locations.destination)}>Save destination as Work</button>
+          </div>
           <label>
             Payment
             <select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as PaymentMethod)}>
@@ -151,6 +183,7 @@ function App() {
           {quote && (
             <div className="grid">
               <Stat label="Fare" value={money(quote.fareMinor)} />
+              <Stat label="Subtotal" value={money(quote.subtotalMinor)} detail={quote.discountMinor ? `Discount ${money(quote.discountMinor)}` : "No discount"} />
               <Stat label="Driver receives" value={money(quote.driverEarningsMinor)} />
               <Stat label="ETA" value={`${Math.round(quote.estimatedDurationSec / 60)} min`} />
             </div>
@@ -160,7 +193,7 @@ function App() {
       </section>
       <section id="history" className="panel">
         <div className="toolbar"><h2>Your recent rides</h2><span>{unread} unread notifications</span></div>
-        <table><thead><tr><th>Route</th><th>Status</th><th>Fare</th><th>Rating</th></tr></thead>
+        <table><thead><tr><th>Route</th><th>Status</th><th>Fare</th><th>Rating</th><th>Receipt</th></tr></thead>
           <tbody>{rides.map((ride) => (
             <tr key={ride.id}>
               <td>{ride.pickupAddress} → {ride.destinationAddress}</td>
@@ -169,10 +202,16 @@ function App() {
               <td>{ride.status === "COMPLETED" && !ride.ratings.length
                 ? <span className="rating-actions">{[1, 2, 3, 4, 5].map((score) => <button key={score} onClick={() => rateRide(ride.id, score)} aria-label={`Rate ${score} stars`}>★</button>)}</span>
                 : ride.ratings[0]?.score ?? "—"}</td>
+              <td>{ride.status === "COMPLETED" && <button className="link-button" onClick={() => loadReceipt(ride.id)}>Receipt</button>}</td>
             </tr>
           ))}</tbody>
         </table>
         {!rides.length && <p>Sign in to view bookings and receipts.</p>}
+      </section>
+      <section className="panel">
+        <h2>Favourite places</h2>
+        {favourites.map((place) => <p key={place.id}><strong>{place.label}</strong> · {place.address}</p>)}
+        {receipt && <div className="notice"><strong>{receipt.receiptNumber}</strong> · Total {money(receipt.fare.totalMinor, receipt.fare.currency)} · Discount {money(receipt.fare.discountMinor, receipt.fare.currency)}</div>}
       </section>
       <section className="panel">
         <h2>Notifications</h2>

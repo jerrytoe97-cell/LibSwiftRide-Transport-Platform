@@ -21,6 +21,7 @@ const schema = z.object({
   PAYMENTS_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   PAYMENT_PROVIDER: z.enum(["sandbox", "mobile-money"]).default("sandbox"),
   PAYMENT_WEBHOOK_SECRET: z.string().min(16),
+  NOTIFICATION_PROVIDER: z.enum(["sandbox", "hooks"]).default("sandbox"),
   ORANGE_MONEY_API_URL: optionalUrl,
   ORANGE_MONEY_API_TOKEN: optionalSecret,
   ORANGE_MONEY_NUMBER: optionalMobileMoneyNumber,

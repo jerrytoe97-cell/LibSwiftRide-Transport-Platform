@@ -12,7 +12,7 @@ import { api } from "./routes.js";
 import { verifyAccessToken } from "./auth.js";
 import { config } from "./config.js";
 import { prisma, redis } from "./lib.js";
-import { updateDriverLocation } from "./services/dispatch.js";
+import { activateScheduledRides, updateDriverLocation } from "./services/dispatch.js";
 import { deliverPendingNotifications } from "./services/notifications.js";
 import { logger } from "./logger.js";
 
@@ -35,6 +35,9 @@ app.use((req, res, next) => {
 });
 app.use("/api", rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api/v1/auth", rateLimit({ windowMs: 15 * 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/auth/password-reset", rateLimit({ windowMs: 60 * 60_000, limit: 8, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/rides", rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/payments", rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api", (_req, res, next) => {
   res.setHeader("cache-control", "no-store");
   next();
@@ -118,9 +121,14 @@ const notificationTimer = setInterval(() => {
   deliverPendingNotifications().catch((error) => logger.error({ err: error }, "notification delivery cycle failed"));
 }, 5_000);
 notificationTimer.unref();
+const scheduledRideTimer = setInterval(() => {
+  activateScheduledRides().catch((error) => logger.error({ err: error }, "scheduled ride activation failed"));
+}, 30_000);
+scheduledRideTimer.unref();
 
 async function shutdown() {
   clearInterval(notificationTimer);
+  clearInterval(scheduledRideTimer);
   server.close();
   await Promise.allSettled([prisma.$disconnect(), redis.quit()]);
 }

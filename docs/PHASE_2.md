@@ -30,3 +30,15 @@ Phase 2 runs only on `phase-2-development`. It does not authorize a merge, pull 
 4. Add location retention jobs and explicit user-facing GPS consent controls.
 5. Add immutable promotion-redemption reservations to prevent concurrent overuse.
 6. Add chart-ready daily analytics queries and export jobs.
+
+## Second increment
+
+- Scheduled rides activate into dispatch five minutes before pickup and are bounded to 15 minutes–30 days ahead.
+- Passenger favourite places support Home, Work and custom labels; completed trips expose participant-authorized receipts and full fare breakdowns.
+- Driver dashboards include wallet balance, performance, ride history and non-overlapping availability windows.
+- Dispatchers receive live Redis-backed driver locations, manual assignment and audited offline/suspension controls.
+- Admin operations include driver KYC decisions, passenger lifecycle controls, promotion activation and review moderation.
+- Commented ratings enter moderation while score-only ratings publish immediately.
+- Users can inspect and revoke their own refresh sessions; suspending passengers revokes active refresh sessions.
+- Email and push delivery remain sandbox-only by default through `NOTIFICATION_PROVIDER=sandbox`.
+- Narrow rate limits protect password reset, ride and payment routes in addition to the global API limits.

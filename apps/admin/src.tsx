@@ -29,12 +29,18 @@ type OperationsReport = {
   platformCommissionMinor: number;
 };
 type Promotion = { id: string; code: string; description: string; active: boolean; uses: number; maxUses: number | null; expiresAt: string };
+type Passenger = { id: string; firstName: string; lastName: string; phone: string; status: string; _count: { rides: number } };
+type Review = { id: string; score: number; comment: string | null; author: { firstName: string; lastName: string }; subject: { firstName: string; lastName: string } };
+type KycCase = { id: string; driver: { user: { firstName: string; lastName: string } }; submittedAt: string };
 
 function App() {
   const [data, setData] = useState<Overview>({ activeRides: 0, availableDrivers: 0, completedRides: 0, grossBookingsMinor: 0, averageRating: null });
   const [paymentSettings, setPaymentSettings] = useState<PaymentSettings | null>(null);
   const [report, setReport] = useState<OperationsReport | null>(null);
   const [promotions, setPromotions] = useState<Promotion[]>([]);
+  const [passengers, setPassengers] = useState<Passenger[]>([]);
+  const [reviews, setReviews] = useState<Review[]>([]);
+  const [kycCases, setKycCases] = useState<KycCase[]>([]);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -44,14 +50,28 @@ function App() {
       apiClient.request<{ data: Overview }>("/admin/overview"),
       apiClient.request<{ data: PaymentSettings }>("/admin/settings/payments"),
       apiClient.request<{ data: OperationsReport }>(`/reports/operations?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`),
-      apiClient.request<{ data: Promotion[] }>("/admin/promos")
-    ]).then(([overview, settings, operations, promoList]) => {
+      apiClient.request<{ data: Promotion[] }>("/admin/promos"),
+      apiClient.request<{ data: Passenger[] }>("/admin/passengers"),
+      apiClient.request<{ data: Review[] }>("/admin/reviews?status=PENDING"),
+      apiClient.request<{ data: KycCase[] }>("/admin/kyc?status=SUBMITTED")
+    ]).then(([overview, settings, operations, promoList, passengerList, reviewList, kycList]) => {
       setData(overview.data);
       setPaymentSettings(settings.data);
       setReport(operations.data);
       setPromotions(promoList.data);
+      setPassengers(passengerList.data); setReviews(reviewList.data); setKycCases(kycList.data);
     }).catch((requestError: Error) => setError(requestError.message));
   }, []);
+
+  async function patch(path: string, body: unknown) {
+    await apiClient.request(path, { method: "PATCH", body: JSON.stringify(body) });
+    window.location.reload();
+  }
+
+  async function reviewKyc(id: string, decision: "APPROVED" | "REJECTED") {
+    await apiClient.request(`/admin/kyc/${id}/review`, { method: "POST", body: JSON.stringify({ decision, ...(decision === "REJECTED" ? { rejectionCode: "DOCUMENT_REVIEW_REQUIRED" } : {}) }) });
+    window.location.reload();
+  }
 
   return (
     <Shell product="Admin">
@@ -88,6 +108,20 @@ function App() {
         </div>
       </section>
       <section className="panel">
+        <h2>Driver approvals</h2>
+        {kycCases.map((kyc) => <div className="toolbar" key={kyc.id}><span>{kyc.driver.user.firstName} {kyc.driver.user.lastName}</span><span><button className="action" onClick={() => reviewKyc(kyc.id, "APPROVED")}>Approve</button> <button className="link-button" onClick={() => reviewKyc(kyc.id, "REJECTED")}>Reject</button></span></div>)}
+        {!kycCases.length && <p>No submitted driver cases.</p>}
+      </section>
+      <section className="panel">
+        <h2>Passenger management</h2>
+        <table><thead><tr><th>Passenger</th><th>Phone</th><th>Rides</th><th>Status</th><th>Action</th></tr></thead><tbody>{passengers.map((passenger) => <tr key={passenger.id}><td>{passenger.firstName} {passenger.lastName}</td><td>{passenger.phone}</td><td>{passenger._count.rides}</td><td>{passenger.status}</td><td><button className="link-button" onClick={() => patch(`/admin/passengers/${passenger.id}/status`, { status: passenger.status === "ACTIVE" ? "SUSPENDED" : "ACTIVE" })}>{passenger.status === "ACTIVE" ? "Suspend" : "Activate"}</button></td></tr>)}</tbody></table>
+      </section>
+      <section className="panel">
+        <h2>Review moderation</h2>
+        {reviews.map((review) => <div key={review.id}><p><strong>{review.score}/5</strong> · {review.author.firstName} → {review.subject.firstName}<br />{review.comment}</p><button className="link-button" onClick={() => patch(`/admin/reviews/${review.id}`, { status: "PUBLISHED" })}>Publish</button> · <button className="link-button" onClick={() => patch(`/admin/reviews/${review.id}`, { status: "HIDDEN" })}>Hide</button></div>)}
+        {!reviews.length && <p>No reviews awaiting moderation.</p>}
+      </section>
+      <section className="panel">
         <span className="eyebrow">Promotions</span>
         <h2>Coupon performance</h2>
         <table><thead><tr><th>Code</th><th>Description</th><th>Uses</th><th>Expires</th><th>Status</th></tr></thead>
@@ -95,7 +129,7 @@ function App() {
             <td><code>{promotion.code}</code></td><td>{promotion.description}</td>
             <td>{promotion.uses}{promotion.maxUses ? ` / ${promotion.maxUses}` : ""}</td>
             <td>{new Date(promotion.expiresAt).toLocaleDateString("en-LR")}</td>
-            <td>{promotion.active ? "Active" : "Inactive"}</td>
+            <td><button className="link-button" onClick={() => patch(`/admin/promos/${promotion.id}`, { active: !promotion.active })}>{promotion.active ? "Deactivate" : "Activate"}</button></td>
           </tr>)}</tbody>
         </table>
       </section>

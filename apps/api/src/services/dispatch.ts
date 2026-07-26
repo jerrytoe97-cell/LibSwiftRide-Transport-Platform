@@ -50,3 +50,20 @@ export async function matchDriver(rideId: string) {
   }
   return null;
 }
+
+export async function activateScheduledRides(now = new Date()) {
+  const due = await prisma.ride.findMany({
+    where: { status: "REQUESTED", scheduledFor: { lte: new Date(now.getTime() + 5 * 60_000) } },
+    select: { id: true },
+    orderBy: { scheduledFor: "asc" },
+    take: 50
+  });
+  for (const ride of due) {
+    const activated = await prisma.ride.updateMany({ where: { id: ride.id, status: "REQUESTED" }, data: { status: "SEARCHING" } });
+    if (activated.count) {
+      await prisma.rideEvent.create({ data: { rideId: ride.id, type: "SCHEDULED_RIDE_ACTIVATED" } });
+      void matchDriver(ride.id);
+    }
+  }
+  return due.length;
+}

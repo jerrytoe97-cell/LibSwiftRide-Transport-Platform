@@ -30,6 +30,12 @@ const delivery = {
 export async function deliverPendingNotifications(limit = 25) {
   const pending = await prisma.notification.findMany({ where: { status: "PENDING", channel: { in: ["EMAIL", "SMS", "PUSH"] } }, orderBy: { createdAt: "asc" }, take: limit, include: { user: { select: { email: true, phone: true, devices: { where: { active: true }, select: { pushToken: true } } } } } });
   for (const notification of pending) {
+    if (config.NOTIFICATION_PROVIDER === "sandbox") {
+      if (config.NODE_ENV !== "production") {
+        await prisma.notification.update({ where: { id: notification.id }, data: { status: "SENT", sentAt: new Date() } });
+      }
+      continue;
+    }
     const provider = delivery[notification.channel as keyof typeof delivery];
     if (!provider?.url || !provider.token) continue;
     try {

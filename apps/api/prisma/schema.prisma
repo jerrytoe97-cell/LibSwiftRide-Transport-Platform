@@ -99,6 +99,18 @@ enum KycDocumentType {
   PROFILE_PHOTO
 }
 
+enum FavouritePlaceType {
+  HOME
+  WORK
+  CUSTOM
+}
+
+enum ReviewStatus {
+  PENDING
+  PUBLISHED
+  HIDDEN
+}
+
 model User {
   id           String     @id @default(uuid())
   phone        String     @unique
@@ -120,6 +132,7 @@ model User {
   notifications Notification[]
   kycReviews   KycCase[] @relation("KycReviewer")
   devices      Device[]
+  favouritePlaces FavouritePlace[]
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 }
@@ -175,6 +188,7 @@ model Driver {
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
   kycCase       KycCase?
+  availabilityWindows DriverAvailability[]
 }
 
 model Vehicle {
@@ -221,6 +235,7 @@ model Ride {
   discountMinor           Int        @default(0)
   idempotencyKey         String
   requestedAt            DateTime   @default(now())
+  scheduledFor           DateTime?
   startedAt              DateTime?
   completedAt            DateTime?
   payment                Payment?
@@ -231,6 +246,7 @@ model Ride {
   @@index([driverId, status])
   @@index([passengerId, requestedAt(sort: Desc)])
   @@index([driverId, completedAt(sort: Desc)])
+  @@index([status, scheduledFor])
 }
 
 model RideEvent {
@@ -297,9 +313,39 @@ model Rating {
   subject   User     @relation("RatingSubject", fields: [subjectId], references: [id])
   score     Int
   comment   String?
+  status    ReviewStatus @default(PUBLISHED)
+  moderatedAt DateTime?
+  moderatedById String?
   createdAt DateTime @default(now())
   @@unique([rideId, authorId])
   @@index([subjectId, createdAt])
+  @@index([status, createdAt])
+}
+
+model FavouritePlace {
+  id          String             @id @default(uuid())
+  userId      String
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        FavouritePlaceType
+  label       String
+  address     String
+  latitude    Decimal            @db.Decimal(9, 6)
+  longitude   Decimal            @db.Decimal(9, 6)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  @@unique([userId, label])
+  @@index([userId, type])
+}
+
+model DriverAvailability {
+  id        String   @id @default(uuid())
+  driverId  String
+  driver    Driver   @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  startsAt  DateTime
+  endsAt    DateTime
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  @@index([driverId, startsAt])
 }
 
 model PromoCode {
