@@ -229,6 +229,8 @@ model Ride {
   @@unique([passengerId, idempotencyKey])
   @@index([status, requestedAt])
   @@index([driverId, status])
+  @@index([passengerId, requestedAt(sort: Desc)])
+  @@index([driverId, completedAt(sort: Desc)])
 }
 
 model RideEvent {
@@ -256,6 +258,7 @@ model Payment {
   providerPayload Json?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
+  @@index([status, createdAt(sort: Desc)])
 }
 
 model Wallet {
@@ -315,6 +318,7 @@ model PromoCode {
   rides           Ride[]
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+  @@index([active, expiresAt])
 }
 
 model Notification {
@@ -388,4 +392,5 @@ model AuditLog {
   createdAt  DateTime @default(now())
   @@index([entityType, entityId])
   @@index([actorId, createdAt])
+  @@index([createdAt(sort: Desc)])
 }

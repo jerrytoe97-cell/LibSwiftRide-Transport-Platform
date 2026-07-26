@@ -138,6 +138,7 @@ dist
 
 # pnpm
 .pnpm-store
+.turbo/
 
 # yarn v3
 .pnp.*

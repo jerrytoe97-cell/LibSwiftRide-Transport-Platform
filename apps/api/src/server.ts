@@ -35,6 +35,10 @@ app.use((req, res, next) => {
 });
 app.use("/api", rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api/v1/auth", rateLimit({ windowMs: 15 * 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api", (_req, res, next) => {
+  res.setHeader("cache-control", "no-store");
+  next();
+});
 app.use(express.json({
   limit: "256kb",
   verify: (req, _res, buffer) => { (req as Request & { rawBody: string }).rawBody = buffer.toString(); }

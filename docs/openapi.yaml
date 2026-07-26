@@ -101,6 +101,18 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         "201": { description: Payment created }
+  /promos/validate:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Validate passenger promotion eligibility
+      responses:
+        "200": { description: Eligible promotion and bounded discount }
+        "404": { description: Promotion unavailable }
+  /notifications:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Read notifications and unread count
+      responses: { "200": { description: Notification inbox } }
   /payments/mobile-money/{method}/display:
     get:
       security: [{ bearerAuth: [] }]
@@ -128,8 +140,23 @@ paths:
       security: [{ bearerAuth: [] }]
       summary: Read operational analytics
       responses: { "200": { description: Analytics overview } }
+  /admin/promos:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Read promotion utilization
+      responses: { "200": { description: Promotion list } }
   /admin/settings/payments:
     get:
       security: [{ bearerAuth: [] }]
       summary: Read payment configuration status without account-number values
       responses: { "200": { description: Payment configuration status } }
+  /drivers/me/dashboard:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Read consolidated driver operations dashboard
+      responses: { "200": { description: Driver dashboard } }
+  /dispatch/drivers:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Read verified available drivers for dispatch
+      responses: { "200": { description: Eligible driver list } }

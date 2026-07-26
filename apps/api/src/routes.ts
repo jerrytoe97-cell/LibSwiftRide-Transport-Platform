@@ -6,7 +6,7 @@ import { config } from "./config.js";
 import { prisma } from "./lib.js";
 import { writeAudit } from "./services/audit.js";
 import { matchDriver } from "./services/dispatch.js";
-import { calculateFare } from "./services/fare.js";
+import { calculateFare, calculatePromoDiscount } from "./services/fare.js";
 import { markNotificationRead, queueNotification } from "./services/notifications.js";
 import { adminPaymentConfiguration, mobileMoneyDisplayNumber } from "./services/payment-settings.js";
 import { paymentProvider, verifyWebhookSignature } from "./services/payments.js";
@@ -160,10 +160,35 @@ api.post("/rides", authenticate, authorize("PASSENGER"), asyncRoute(async (req, 
 
 api.get("/rides", authenticate, asyncRoute(async (req, res) => {
   const limit = z.coerce.number().int().min(1).max(100).default(25).parse(req.query.limit);
+  const cursor = z.string().uuid().optional().parse(req.query.cursor);
+  const status = z.enum(["REQUESTED", "SEARCHING", "DRIVER_ASSIGNED", "DRIVER_ARRIVING", "DRIVER_ARRIVED", "IN_PROGRESS", "COMPLETED", "CANCELLED"]).optional().parse(req.query.status);
   const driver = req.user!.role === "DRIVER" ? await prisma.driver.findUnique({ where: { userId: req.user!.sub } }) : null;
-  const where = req.user!.role === "PASSENGER" ? { passengerId: req.user!.sub } : driver ? { driverId: driver.id } : {};
-  const rides = await prisma.ride.findMany({ where, orderBy: { requestedAt: "desc" }, take: limit, include: { driver: { include: { user: true, vehicle: true } }, payment: true, ratings: true } });
-  res.json({ data: rides });
+  if (req.user!.role !== "PASSENGER" && !driver && !["ADMIN", "SUPPORT"].includes(req.user!.role)) {
+    return res.status(403).json({ error: { code: "FORBIDDEN", message: "Ride history is unavailable for this role" } });
+  }
+  const participantWhere = req.user!.role === "PASSENGER" ? { passengerId: req.user!.sub } : driver ? { driverId: driver.id } : {};
+  const rides = await prisma.ride.findMany({
+    where: { ...participantWhere, ...(status ? { status } : {}) },
+    orderBy: [{ requestedAt: "desc" }, { id: "desc" }],
+    take: limit + 1,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    include: { driver: { include: { user: { select: { id: true, firstName: true, lastName: true } }, vehicle: true } }, payment: true, ratings: true }
+  });
+  const hasMore = rides.length > limit;
+  const page = hasMore ? rides.slice(0, limit) : rides;
+  res.json({ data: page, meta: { hasMore, nextCursor: hasMore ? page.at(-1)?.id ?? null : null } });
+}));
+
+api.post("/promos/validate", authenticate, authorize("PASSENGER"), asyncRoute(async (req, res) => {
+  const input = z.object({ code: z.string().trim().min(3).max(30), fareMinor: z.number().int().positive() }).parse(req.body);
+  const promo = await prisma.promoCode.findFirst({
+    where: { code: input.code.toUpperCase(), active: true, startsAt: { lte: new Date() }, expiresAt: { gte: new Date() } }
+  });
+  if (!promo || (promo.maxUses != null && promo.uses >= promo.maxUses) || input.fareMinor < promo.minimumFareMinor) {
+    return res.status(404).json({ error: { code: "PROMO_NOT_AVAILABLE", message: "This promotion is invalid or unavailable" } });
+  }
+  const discountMinor = calculatePromoDiscount(input.fareMinor, promo);
+  res.json({ data: { code: promo.code, description: promo.description, eligible: true, discountMinor } });
 }));
 
 api.get("/rides/:id", authenticate, asyncRoute(async (req, res) => {
@@ -225,7 +250,14 @@ api.post("/rides/:id/payments", authenticate, asyncRoute(async (req, res) => {
 }));
 
 api.get("/notifications", authenticate, asyncRoute(async (req, res) => {
-  res.json({ data: await prisma.notification.findMany({ where: { userId: req.user!.sub }, orderBy: { createdAt: "desc" }, take: 50 }) });
+  const limit = z.coerce.number().int().min(1).max(100).default(25).parse(req.query.limit);
+  const unreadOnly = z.enum(["true", "false"]).default("false").transform((value) => value === "true").parse(req.query.unreadOnly);
+  const where = { userId: req.user!.sub, ...(unreadOnly ? { readAt: null } : {}) };
+  const [notifications, unread] = await Promise.all([
+    prisma.notification.findMany({ where, orderBy: { createdAt: "desc" }, take: limit }),
+    prisma.notification.count({ where: { userId: req.user!.sub, readAt: null } })
+  ]);
+  res.json({ data: notifications, meta: { unread } });
 }));
 
 api.post("/notifications/:id/read", authenticate, asyncRoute(async (req, res) => {
@@ -309,6 +341,16 @@ api.get("/dispatch/rides", authenticate, authorize("DISPATCHER", "ADMIN", "SUPPO
   res.json({ data: rides });
 }));
 
+api.get("/dispatch/drivers", authenticate, authorize("DISPATCHER", "ADMIN"), asyncRoute(async (_req, res) => {
+  const drivers = await prisma.driver.findMany({
+    where: { status: "AVAILABLE", verifiedAt: { not: null }, vehicle: { is: { active: true } } },
+    select: { id: true, status: true, user: { select: { firstName: true, lastName: true } }, vehicle: { select: { make: true, model: true, plateNumber: true } } },
+    orderBy: { updatedAt: "asc" },
+    take: 200
+  });
+  res.json({ data: drivers });
+}));
+
 api.post("/dispatch/rides/:id/assign", authenticate, authorize("DISPATCHER", "ADMIN"), asyncRoute(async (req, res) => {
   const driverId = z.object({ driverId: z.uuid() }).parse(req.body).driverId;
   const assigned = await prisma.$transaction(async (tx) => {
@@ -337,6 +379,12 @@ api.post("/admin/promos", authenticate, authorize("ADMIN"), asyncRoute(async (re
   res.status(201).json({ data: promo });
 }));
 
+api.get("/admin/promos", authenticate, authorize("ADMIN"), asyncRoute(async (req, res) => {
+  const active = z.enum(["true", "false"]).optional().transform((value) => value == null ? undefined : value === "true").parse(req.query.active);
+  const promotions = await prisma.promoCode.findMany({ where: active == null ? {} : { active }, orderBy: { createdAt: "desc" }, take: 100 });
+  res.json({ data: promotions });
+}));
+
 api.get("/drivers/me/earnings", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {
   const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub } });
   if (!driver) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Driver profile not found" } });
@@ -346,6 +394,29 @@ api.get("/drivers/me/earnings", authenticate, authorize("DRIVER"), asyncRoute(as
     _count: true
   });
   res.json({ data: { currency: "LRD", completedRides: totals._count, ...totals._sum } });
+}));
+
+api.get("/drivers/me/dashboard", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {
+  const driver = await prisma.driver.findUnique({
+    where: { userId: req.user!.sub },
+    include: { vehicle: true, kycCase: true }
+  });
+  if (!driver) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Driver profile not found" } });
+  const [earnings, rating, activeRide, unreadNotifications] = await Promise.all([
+    prisma.ride.aggregate({ where: { driverId: driver.id, status: "COMPLETED" }, _sum: { driverEarningsMinor: true }, _count: true }),
+    prisma.rating.aggregate({ where: { subjectId: req.user!.sub }, _avg: { score: true }, _count: true }),
+    prisma.ride.findFirst({ where: { driverId: driver.id, status: { in: ["DRIVER_ASSIGNED", "DRIVER_ARRIVING", "DRIVER_ARRIVED", "IN_PROGRESS"] } }, orderBy: { requestedAt: "desc" } }),
+    prisma.notification.count({ where: { userId: req.user!.sub, readAt: null } })
+  ]);
+  res.json({
+    data: {
+      driver: { id: driver.id, status: driver.status, verifiedAt: driver.verifiedAt, onboardingStep: driver.onboardingStep, kycStatus: driver.kycCase?.status ?? null, vehicle: driver.vehicle },
+      earnings: { currency: "LRD", completedRides: earnings._count, driverEarningsMinor: earnings._sum.driverEarningsMinor ?? 0 },
+      rating: { average: rating._avg.score, count: rating._count },
+      activeRide,
+      unreadNotifications
+    }
+  });
 }));
 
 api.post("/drivers/me/availability", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {
