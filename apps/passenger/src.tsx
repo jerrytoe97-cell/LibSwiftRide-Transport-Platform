@@ -27,6 +27,8 @@ type Ride = {
 type Notification = { id: string; title: string; body: string; readAt: string | null };
 type FavouritePlace = { id: string; type: "HOME" | "WORK" | "CUSTOM"; label: string; address: string; latitude: number; longitude: number };
 type ChatMessage = { id: string; senderId: string; content: string; createdAt: string };
+type RidePass = { id: string; ridesRemaining: number; expiresAt: string; status: string; product: { name: string } };
+type Delivery = { id: string; status: string; pickupAddress: string; dropoffAddress: string; fareMinor: number };
 
 const locations = {
   pickup: { address: "Broad Street, Monrovia", latitude: 6.3156, longitude: -10.8074 },
@@ -53,20 +55,26 @@ function App() {
   const [referralCode, setReferralCode] = useState("");
   const trackingSocket = useRef<WebSocket | null>(null);
   const [locale, setLocale] = useState<SupportedLocale>("en");
+  const [ridePasses, setRidePasses] = useState<RidePass[]>([]);
+  const [deliveries, setDeliveries] = useState<Delivery[]>([]);
 
   async function loadDashboard() {
     if (!apiClient.hasSession()) return;
-    const [history, inbox, places, referrals] = await Promise.all([
+    const [history, inbox, places, referrals, passes, deliveryHistory] = await Promise.all([
       apiClient.request<{ data: Ride[] }>("/rides?limit=10"),
       apiClient.request<{ data: Notification[]; meta: { unread: number } }>("/notifications?limit=5"),
       apiClient.request<{ data: FavouritePlace[] }>("/favourite-places"),
-      apiClient.request<{ data: { referralCode: string } }>("/referrals/me")
+      apiClient.request<{ data: { referralCode: string } }>("/referrals/me"),
+      apiClient.request<{ data: RidePass[] }>("/ride-passes/me"),
+      apiClient.request<{ data: Delivery[] }>("/deliveries")
     ]);
     setRides(history.data);
     setNotifications(inbox.data);
     setUnread(inbox.meta.unread);
     setFavourites(places.data);
     setReferralCode(referrals.data.referralCode);
+    setRidePasses(passes.data);
+    setDeliveries(deliveryHistory.data);
   }
 
   useEffect(() => {
@@ -136,6 +144,18 @@ function App() {
     } catch (error) {
       setMessage((error as Error).message);
     }
+  }
+
+  async function requestDelivery() {
+    try {
+      const response = await apiClient.request<{ data: Delivery }>("/deliveries", {
+        method: "POST",
+        idempotencyKey: crypto.randomUUID(),
+        body: JSON.stringify({ pickup: locations.pickup, dropoff: locations.destination, recipientName: "Delivery recipient", recipientPhone: "0770000000", packageDescription: "Sealed small parcel" })
+      });
+      setMessage(`Delivery ${response.data.id.slice(0, 8)} requested.`);
+      await loadDashboard();
+    } catch (error) { setMessage((error as Error).message); }
   }
 
   async function saveFavourite(type: FavouritePlace["type"], label: string, place: typeof locations.pickup) {
@@ -277,6 +297,16 @@ function App() {
         <div className="form-row"><label>Message<input value={chatInput} maxLength={500} onChange={(event) => setChatInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") sendChat(); }} /></label><button className="action" onClick={sendChat}>Send</button></div>
       </section>}
       <section className="panel"><h2>Invite and earn</h2><p>Share referral code <strong>{referralCode || "Sign in to view your code"}</strong>. Rewards are issued after the referred passenger completes their first ride.</p></section>
+      <section className="panel">
+        <div className="toolbar"><div><span className="eyebrow">Delivery service</span><h2>Send a parcel</h2></div><button className="action" onClick={requestDelivery}>Request sample route</button></div>
+        <p>Delivery fares and the 88/12 allocation are calculated by the API. Recipient details are visible only to authorized delivery participants.</p>
+        <table><thead><tr><th>Route</th><th>Status</th><th>Fare</th></tr></thead><tbody>{deliveries.map((delivery) => <tr key={delivery.id}><td>{delivery.pickupAddress} → {delivery.dropoffAddress}</td><td>{delivery.status}</td><td>{money(delivery.fareMinor)}</td></tr>)}</tbody></table>
+      </section>
+      <section className="panel">
+        <span className="eyebrow">Monthly passes</span><h2>Your ride credits</h2>
+        {ridePasses.map((pass) => <p key={pass.id}><strong>{pass.product.name}</strong> · {pass.ridesRemaining} rides remaining · expires {new Date(pass.expiresAt).toLocaleDateString("en-LR")} · {pass.status}</p>)}
+        {!ridePasses.length && <p>No active pass. Pass purchasing remains unavailable until its sandbox payment flow is certified.</p>}
+      </section>
       <section className="panel">
         <h2>Favourite places</h2>
         {favourites.map((place) => <p key={place.id}><strong>{place.label}</strong> · {place.address}</p>)}

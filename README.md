@@ -14,6 +14,7 @@ LibSwiftRide is an enterprise ride-hailing platform designed for Liberia. This r
 | Fleet portal | `apps/fleet` | Vehicles, drivers, compliance, dispatch and settlements |
 | Admin dashboard | `apps/admin` | Operations, safety, pricing, users, payments and audit logs |
 | Dispatcher console | `apps/dispatcher` | Live ride queue, manual matching and trip intervention |
+| Business portal | `apps/business` | Corporate budgets, employee travel policy and account reporting |
 | Platform API | `apps/api` | REST API, WebSocket GPS stream and background-ready domain services |
 
 ## Architecture
@@ -52,6 +53,7 @@ The default local endpoints are:
 - Fleet: `http://localhost:3003`
 - Admin: `http://localhost:3004`
 - Dispatcher: `http://localhost:3005`
+- Business: `http://localhost:3006`
 - API and OpenAPI JSON: `http://localhost:4000/api/v1`, `http://localhost:4000/openapi.json`
 - Health checks: `http://localhost:4000/health/live`, `http://localhost:4000/health/ready`
 

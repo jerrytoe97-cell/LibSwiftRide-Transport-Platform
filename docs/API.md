@@ -56,9 +56,26 @@ Implemented foundation endpoints:
 | GET | `/auth/sessions` | Authenticated refresh-session list |
 | DELETE | `/auth/sessions/:id` | Authenticated refresh-session revocation |
 | GET | `/admin/settings/payments` | Admin; returns configuration status, never account numbers |
+| POST | `/admin/corporate/accounts` | Admin; creates an audited business account |
+| GET | `/corporate/account` | Business manager/admin; budget and employee usage |
+| POST/PATCH | `/corporate/employees` | Business manager/admin; employee ride policy |
+| POST/DELETE | `/fleet/drivers` | Fleet manager/admin; safe multi-driver assignment |
+| GET | `/drivers/me/incentives` | Driver incentive progress and awards |
+| POST | `/admin/incentives` | Admin; create bounded incentive programs |
+| GET/POST | `/admin/settings/commission` | Admin; locked 88/12 policy and audit snapshots |
+| GET/POST | `/geofence-zones`, `/admin/geofence-zones` | Operations/admin dynamic-pricing zones |
+| GET | `/dispatch/airport-pickups` | Dispatcher/admin arrival queue |
+| GET/POST | `/deliveries` | Role-scoped delivery list and passenger booking |
+| POST | `/deliveries/:id/transitions` | Authorized delivery lifecycle |
+| GET | `/ride-passes/products`, `/ride-passes/me` | Authenticated pass catalogue and passenger passes |
+| POST | `/admin/ride-pass-products`, `/admin/ride-passes/grant` | Admin pass operations |
+| GET/POST | `/admin/campaigns` | Admin coupon campaign budgets |
+| GET/PATCH | `/admin/fraud-signals` | Operations fraud-review queue |
+| GET | `/admin/audit-logs` | Admin filtered, cursor-paginated audit report |
+| GET | `/reports/advanced` | Admin corporate, delivery, campaign, risk and incentive analytics |
 
 WebSocket endpoint `/ws` accepts the access token through an `auth.<base64url-token>` WebSocket subprotocol, keeping credentials out of URLs and proxy access logs. Driver locations bind to the verified token subject, and ride subscriptions require participant or operations access. Production should use very short-lived socket tickets when the client platform supports them and Redis pub/sub across replicas.
 
 Subscribed ride participants may send `chat.send` events with `rideId` and `content`; the server emits persisted `chat.message` events. Messages are limited to 500 characters and one send per second per connection.
 
-The `/openapi.json` endpoint is a placeholder document. Generate a complete contract from route schemas before public integration.
+The maintained contract is `docs/openapi.yaml`; `/openapi.json` exposes lightweight service discovery. Provider integrations and any external client must be certified against the maintained contract before launch.

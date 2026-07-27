@@ -17,6 +17,7 @@ type Dashboard = {
 type AvailabilityWindow = { id: string; startsAt: string; endsAt: string };
 type RideHistory = { id: string; status: string; pickupAddress: string; destinationAddress: string; driverEarningsMinor: number; completedAt: string | null };
 type ChatMessage = { id: string; senderId: string; content: string; createdAt: string };
+type Incentive = { id: string; name: string; minimumRides: number; bonusMinor: number; completedRides: number; awarded: boolean; endsAt: string };
 
 const nextStatus: Record<string, string> = {
   DRIVER_ASSIGNED: "DRIVER_ARRIVING",
@@ -35,17 +36,20 @@ function App() {
   const [endsAt, setEndsAt] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
+  const [incentives, setIncentives] = useState<Incentive[]>([]);
   const socket = useRef<WebSocket | null>(null);
   const watchId = useRef<number | null>(null);
 
   async function load() {
     if (!apiClient.hasSession()) return;
-    const [response, windows, rides] = await Promise.all([
+    const [response, windows, rides, incentivePrograms] = await Promise.all([
       apiClient.request<{ data: Dashboard }>("/drivers/me/dashboard"),
       apiClient.request<{ data: AvailabilityWindow[] }>("/drivers/me/availability-schedule"),
-      apiClient.request<{ data: RideHistory[] }>("/rides?limit=10")
+      apiClient.request<{ data: RideHistory[] }>("/rides?limit=10"),
+      apiClient.request<{ data: Incentive[] }>("/drivers/me/incentives")
     ]);
     setDashboard(response.data); setSchedule(windows.data); setHistory(rides.data);
+    setIncentives(incentivePrograms.data);
     if (response.data.activeRide) {
       apiClient.request<{ data: ChatMessage[] }>(`/rides/${response.data.activeRide.id}/chat`).then((chat) => setChatMessages(chat.data)).catch(() => setChatMessages([]));
       if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify({ type: "ride.subscribe", rideId: response.data.activeRide.id }));
@@ -178,6 +182,10 @@ function App() {
       <section className="panel">
         <div className="toolbar"><h2>Performance and ride history</h2><strong>{Math.round((dashboard?.performance.completionRate ?? 0) * 100)}% completion</strong></div>
         <table><thead><tr><th>Route</th><th>Status</th><th>Earnings</th></tr></thead><tbody>{history.map((ride) => <tr key={ride.id}><td>{ride.pickupAddress} → {ride.destinationAddress}</td><td>{ride.status.replaceAll("_", " ")}</td><td>{money(ride.driverEarningsMinor)}</td></tr>)}</tbody></table>
+      </section>
+      <section className="panel"><h2>Incentives and bonuses</h2>
+        {incentives.map((program) => <p key={program.id}><strong>{program.name}</strong> · {Math.min(program.completedRides, program.minimumRides)}/{program.minimumRides} rides · {money(program.bonusMinor)} bonus · {program.awarded ? "Awarded" : `ends ${new Date(program.endsAt).toLocaleDateString("en-LR")}`}</p>)}
+        {!incentives.length && <p>No active incentive programs.</p>}
       </section>
     </Shell>
   );

@@ -40,6 +40,10 @@ app.use("/api/v1/auth", rateLimit({ windowMs: 15 * 60_000, limit: 30, standardHe
 app.use("/api/v1/auth/password-reset", rateLimit({ windowMs: 60 * 60_000, limit: 8, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api/v1/rides", rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api/v1/payments", rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/deliveries", rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/corporate", rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/admin", rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/reports", rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api", (_req, res, next) => {
   res.setHeader("cache-control", "no-store");
   next();

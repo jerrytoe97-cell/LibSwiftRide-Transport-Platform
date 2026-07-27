@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: LibSwiftRide API
-  version: 0.2.0
+  version: 0.5.0
   description: Versioned API for LibSwiftRide passengers, drivers, fleets and operations.
 servers:
   - url: https://api.example.com/api/v1
@@ -28,6 +28,45 @@ components:
             message: { type: string }
             details: {}
 paths:
+  /corporate/account:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Read the authorized business account, employees and monthly budget usage
+      responses: { "200": { description: Corporate account overview } }
+  /corporate/employees:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Add an employee with a bounded monthly ride allowance
+      responses: { "201": { description: Employee added } }
+  /deliveries:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: List role-scoped delivery requests
+      responses: { "200": { description: Deliveries } }
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Create an idempotent server-priced delivery request
+      parameters:
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string }
+      responses: { "201": { description: Delivery requested } }
+  /ride-passes/me:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: List the passenger's monthly passes and remaining credits
+      responses: { "200": { description: Ride passes } }
+  /reports/advanced:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Read corporate, delivery, incentive, campaign and fraud analytics
+      responses: { "200": { description: Advanced analytics } }
+  /admin/audit-logs:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Query cursor-paginated privileged audit events
+      responses: { "200": { description: Audit events } }
   /auth/register:
     post:
       summary: Register a passenger or driver account

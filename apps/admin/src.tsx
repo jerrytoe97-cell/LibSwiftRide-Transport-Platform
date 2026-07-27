@@ -38,6 +38,16 @@ type Analytics = {
   growth: { newPassengers: number; newDrivers: number };
   safetyIncidents: number;
 };
+type AdvancedAnalytics = {
+  rides: Array<{ serviceType: string; status: string; _count: number; _sum: { fareMinor: number | null } }>;
+  deliveries: Array<{ status: string; _count: number; _sum: { fareMinor: number | null } }>;
+  corporate: { _count: number; _sum: { fareMinor: number | null } };
+  incentives: { _count: number; _sum: { amountMinor: number | null } };
+  campaigns: { _count: number; _sum: { budgetMinor: number | null; spentMinor: number | null } };
+  fraud: Array<{ action: string; _count: number }>;
+};
+type CommissionSettings = { enforced: { driverShareBps: number; companyCommissionBps: number }; editable: false; history: Array<{ id: string; effectiveAt: string; reason: string }> };
+type FraudSignal = { id: string; rule: string; score: number; action: string; entityType: string; createdAt: string };
 
 function App() {
   const [data, setData] = useState<Overview>({ activeRides: 0, availableDrivers: 0, completedRides: 0, grossBookingsMinor: 0, averageRating: null });
@@ -48,6 +58,9 @@ function App() {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [kycCases, setKycCases] = useState<KycCase[]>([]);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
+  const [advanced, setAdvanced] = useState<AdvancedAnalytics | null>(null);
+  const [commission, setCommission] = useState<CommissionSettings | null>(null);
+  const [fraudSignals, setFraudSignals] = useState<FraudSignal[]>([]);
   const [broadcastTitle, setBroadcastTitle] = useState("");
   const [broadcastBody, setBroadcastBody] = useState("");
   const [broadcastRole, setBroadcastRole] = useState("PASSENGER");
@@ -64,14 +77,18 @@ function App() {
       apiClient.request<{ data: Passenger[] }>("/admin/passengers"),
       apiClient.request<{ data: Review[] }>("/admin/reviews?status=PENDING"),
       apiClient.request<{ data: KycCase[] }>("/admin/kyc?status=SUBMITTED"),
-      apiClient.request<{ data: Analytics }>(`/reports/analytics?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`)
-    ]).then(([overview, settings, operations, promoList, passengerList, reviewList, kycList, analyticsReport]) => {
+      apiClient.request<{ data: Analytics }>(`/reports/analytics?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`),
+      apiClient.request<{ data: AdvancedAnalytics }>(`/reports/advanced?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`),
+      apiClient.request<{ data: CommissionSettings }>("/admin/settings/commission"),
+      apiClient.request<{ data: FraudSignal[] }>("/admin/fraud-signals")
+    ]).then(([overview, settings, operations, promoList, passengerList, reviewList, kycList, analyticsReport, advancedReport, commissionSettings, signals]) => {
       setData(overview.data);
       setPaymentSettings(settings.data);
       setReport(operations.data);
       setPromotions(promoList.data);
       setPassengers(passengerList.data); setReviews(reviewList.data); setKycCases(kycList.data);
       setAnalytics(analyticsReport.data);
+      setAdvanced(advancedReport.data); setCommission(commissionSettings.data); setFraudSignals(signals.data);
     }).catch((requestError: Error) => setError(requestError.message));
   }, []);
 
@@ -136,6 +153,27 @@ function App() {
           <Stat label="Fare adjustments" value={money((analytics?.revenue.waitingFeesMinor ?? 0) + (analytics?.revenue.tollsMinor ?? 0))} detail={`${money(analytics?.revenue.discountsMinor ?? 0)} discounts`} />
           <Stat label="Safety incidents" value={String(analytics?.safetyIncidents ?? 0)} detail="Requires operations review" />
         </div>
+      </section>
+      <section className="panel">
+        <span className="eyebrow">Advanced business intelligence</span>
+        <h2>Corporate, delivery and risk operations</h2>
+        <div className="grid">
+          <Stat label="Corporate rides" value={String(advanced?.corporate._count ?? 0)} detail={money(advanced?.corporate._sum.fareMinor ?? 0)} />
+          <Stat label="Deliveries" value={String(advanced?.deliveries.reduce((sum, row) => sum + row._count, 0) ?? 0)} detail={money(advanced?.deliveries.reduce((sum, row) => sum + (row._sum.fareMinor ?? 0), 0) ?? 0)} />
+          <Stat label="Incentive awards" value={String(advanced?.incentives._count ?? 0)} detail={money(advanced?.incentives._sum.amountMinor ?? 0)} />
+          <Stat label="Campaign spend" value={money(advanced?.campaigns._sum.spentMinor ?? 0)} detail={`${advanced?.campaigns._count ?? 0} campaigns`} />
+          <Stat label="Fraud signals" value={String(advanced?.fraud.reduce((sum, row) => sum + row._count, 0) ?? 0)} detail="Queued for review" />
+        </div>
+      </section>
+      <section className="panel">
+        <span className="eyebrow">Financial controls</span>
+        <h2>Commission configuration</h2>
+        <p>The production split is locked by API validation and database constraints. Changes require a reviewed release, not a dashboard override.</p>
+        <table><tbody><tr><th>Driver share</th><td>{(commission?.enforced.driverShareBps ?? 8800) / 100}%</td></tr><tr><th>Company commission</th><td>{(commission?.enforced.companyCommissionBps ?? 1200) / 100}%</td></tr><tr><th>Editable at runtime</th><td>No</td></tr></tbody></table>
+      </section>
+      <section className="panel">
+        <span className="eyebrow">Fraud operations</span><h2>Signals awaiting review</h2>
+        <table><thead><tr><th>Rule</th><th>Entity</th><th>Score</th><th>Action</th><th>Review</th></tr></thead><tbody>{fraudSignals.map((signal) => <tr key={signal.id}><td>{signal.rule}</td><td>{signal.entityType}</td><td>{signal.score}</td><td>{signal.action}</td><td><button className="link-button" onClick={() => patch(`/admin/fraud-signals/${signal.id}/review`, {})}>Mark reviewed</button></td></tr>)}</tbody></table>
       </section>
       <section className="panel">
         <h2>Driver approvals</h2>
