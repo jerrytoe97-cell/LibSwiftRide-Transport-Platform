@@ -16,6 +16,7 @@ type Dashboard = {
 };
 type AvailabilityWindow = { id: string; startsAt: string; endsAt: string };
 type RideHistory = { id: string; status: string; pickupAddress: string; destinationAddress: string; driverEarningsMinor: number; completedAt: string | null };
+type ChatMessage = { id: string; senderId: string; content: string; createdAt: string };
 
 const nextStatus: Record<string, string> = {
   DRIVER_ASSIGNED: "DRIVER_ARRIVING",
@@ -32,6 +33,8 @@ function App() {
   const [history, setHistory] = useState<RideHistory[]>([]);
   const [startsAt, setStartsAt] = useState("");
   const [endsAt, setEndsAt] = useState("");
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
   const socket = useRef<WebSocket | null>(null);
   const watchId = useRef<number | null>(null);
 
@@ -43,6 +46,10 @@ function App() {
       apiClient.request<{ data: RideHistory[] }>("/rides?limit=10")
     ]);
     setDashboard(response.data); setSchedule(windows.data); setHistory(rides.data);
+    if (response.data.activeRide) {
+      apiClient.request<{ data: ChatMessage[] }>(`/rides/${response.data.activeRide.id}/chat`).then((chat) => setChatMessages(chat.data)).catch(() => setChatMessages([]));
+      if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify({ type: "ride.subscribe", rideId: response.data.activeRide.id }));
+    }
     setMessage("");
   }
 
@@ -72,11 +79,18 @@ function App() {
         const connection = apiClient.connect();
         socket.current = connection;
         connection.onopen = () => {
+          if (dashboard?.activeRide) connection.send(JSON.stringify({ type: "ride.subscribe", rideId: dashboard.activeRide.id }));
           watchId.current = navigator.geolocation.watchPosition((position) => {
             const location = { latitude: position.coords.latitude, longitude: position.coords.longitude };
             setCoords(location);
             connection.send(JSON.stringify({ type: "driver.location", ...location, heading: position.coords.heading, speedMps: position.coords.speed }));
           }, () => setMessage("Location permission is required while online."), { enableHighAccuracy: true, maximumAge: 5_000 });
+        };
+        connection.onmessage = (event) => {
+          const update = JSON.parse(event.data) as { type: string; id?: string; senderId?: string; content?: string; createdAt?: string };
+          if (update.type === "chat.message" && update.id && update.senderId && update.content && update.createdAt) {
+            setChatMessages((current) => current.some((message) => message.id === update.id) ? current : [...current, { id: update.id!, senderId: update.senderId!, content: update.content!, createdAt: update.createdAt! }]);
+          }
         };
       }
       await load();
@@ -114,6 +128,12 @@ function App() {
     } catch (error) { setMessage((error as Error).message); }
   }
 
+  function sendChat() {
+    if (!dashboard?.activeRide || !chatInput.trim() || socket.current?.readyState !== WebSocket.OPEN) return;
+    socket.current.send(JSON.stringify({ type: "chat.send", rideId: dashboard.activeRide.id, content: chatInput }));
+    setChatInput("");
+  }
+
   const online = dashboard?.driver.status === "AVAILABLE";
   const activeNextStatus = dashboard?.activeRide ? nextStatus[dashboard.activeRide.status] : undefined;
   return (
@@ -144,6 +164,11 @@ function App() {
           <p>{dashboard?.unreadNotifications ?? 0} unread notifications</p>
         </div>
       </section>
+      {dashboard?.activeRide && <section className="panel" aria-live="polite">
+        <h2>Passenger chat</h2>
+        {chatMessages.map((chat) => <p key={chat.id}>{chat.content}<br /><small>{new Date(chat.createdAt).toLocaleTimeString("en-LR")}</small></p>)}
+        <div className="form-row"><label>Message<input value={chatInput} maxLength={500} onChange={(event) => setChatInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") sendChat(); }} /></label><Action onClick={sendChat}>Send</Action></div>
+      </section>}
       <section className="panel">
         <h2>Availability schedule</h2>
         <div className="form-row"><label>Start<input type="datetime-local" value={startsAt} onChange={(event) => setStartsAt(event.target.value)} /></label><label>End<input type="datetime-local" value={endsAt} onChange={(event) => setEndsAt(event.target.value)} /></label></div>

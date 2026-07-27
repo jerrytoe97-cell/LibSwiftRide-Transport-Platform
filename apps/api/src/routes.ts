@@ -14,6 +14,8 @@ import { assertTransition, type RideState } from "./services/ride-state.js";
 import { validateAvailabilityWindow, validateRideSchedule } from "./services/scheduling.js";
 import { logger } from "./logger.js";
 import { distanceMetres, estimateEtaSeconds } from "./services/tracking.js";
+import { createReceiptPdf } from "./services/receipt-pdf.js";
+import { REFERRAL_REWARD_MINOR } from "./services/referrals.js";
 
 export const api = Router();
 const asyncRoute = (handler: (req: any, res: any) => Promise<unknown>) =>
@@ -25,17 +27,36 @@ const registration = z.object({
   password: z.string().min(12).max(128),
   firstName: z.string().min(1).max(80),
   lastName: z.string().min(1).max(80),
-  role: z.enum(["PASSENGER", "DRIVER"])
+  role: z.enum(["PASSENGER", "DRIVER"]),
+  referralCode: z.string().trim().min(6).max(80).optional()
 });
 
 api.post("/auth/register", asyncRoute(async (req, res) => {
   const input = registration.parse(req.body);
-  const { password, email, ...profile } = input;
-  const user = await prisma.user.create({
-    data: { ...profile, ...(email ? { email } : {}), passwordHash: await hashPassword(password), status: "ACTIVE" },
-    select: { id: true, phone: true, email: true, firstName: true, lastName: true, role: true }
+  const { password, email, referralCode, ...profile } = input;
+  const referrer = referralCode ? await prisma.user.findUnique({ where: { referralCode }, select: { id: true } }) : null;
+  if (referralCode && !referrer) return res.status(422).json({ error: { code: "INVALID_REFERRAL", message: "Referral code is invalid" } });
+  const passwordHash = await hashPassword(password);
+  const user = await prisma.$transaction(async (tx) => {
+    const created = await tx.user.create({
+      data: { ...profile, ...(email ? { email } : {}), passwordHash, status: "ACTIVE", referralCode: `LSR${randomBytes(5).toString("hex").toUpperCase()}`, ...(referrer ? { referredById: referrer.id } : {}) },
+      select: { id: true, phone: true, email: true, firstName: true, lastName: true, role: true }
+    });
+    if (referrer) await tx.referral.create({ data: { referrerId: referrer.id, referredUserId: created.id } });
+    return created;
   });
   res.status(201).json({ data: user, tokens: await issueTokens({ sub: user.id, role: user.role }) });
+}));
+
+api.get("/referrals/me", authenticate, asyncRoute(async (req, res) => {
+  const user = await prisma.user.findUnique({ where: { id: req.user!.sub }, select: { referralCode: true, referralRewards: { orderBy: { createdAt: "desc" }, select: { id: true, status: true, rewardMinor: true, qualifiedAt: true, rewardedAt: true, createdAt: true } } } });
+  res.json({ data: user });
+}));
+
+api.patch("/users/me/preferences", authenticate, asyncRoute(async (req, res) => {
+  const locale = z.object({ locale: z.enum(["en", "fr"]) }).parse(req.body).locale;
+  const user = await prisma.user.update({ where: { id: req.user!.sub }, data: { locale }, select: { locale: true } });
+  res.json({ data: user });
 }));
 
 api.post("/auth/login", asyncRoute(async (req, res) => {
@@ -242,6 +263,32 @@ api.get("/rides/:id/receipt", authenticate, asyncRoute(async (req, res) => {
   } });
 }));
 
+api.get("/rides/:id/receipt.pdf", authenticate, asyncRoute(async (req, res) => {
+  const ride = await prisma.ride.findUnique({ where: { id: req.params.id }, include: { driver: { include: { user: { select: { firstName: true, lastName: true } } } }, payment: true, promoCode: { select: { code: true } } } });
+  if (!ride || ride.status !== "COMPLETED") return res.status(404).json({ error: { code: "RECEIPT_NOT_FOUND", message: "Completed ride receipt not found" } });
+  const participant = ride.passengerId === req.user!.sub || ride.driver?.userId === req.user!.sub;
+  if (!participant && !["ADMIN", "SUPPORT"].includes(req.user!.role)) return res.status(403).json({ error: { code: "FORBIDDEN", message: "Receipt access denied" } });
+  const receiptNumber = `LSR-${ride.id.slice(0, 8).toUpperCase()}`;
+  const pdf = createReceiptPdf([
+    "LibSwiftRide trip receipt", `Receipt: ${receiptNumber}`, `Completed: ${ride.completedAt?.toISOString() ?? ""}`,
+    `Route: ${ride.pickupAddress} to ${ride.destinationAddress}`, `Fare: ${(ride.fareMinor / 100).toFixed(2)} ${ride.currency}`,
+    `Discount: ${(ride.discountMinor / 100).toFixed(2)} ${ride.currency}`, `Payment: ${ride.payment?.method ?? ride.paymentMethod} (${ride.payment?.status ?? "PENDING"})`,
+    `Driver: ${ride.driver ? `${ride.driver.user.firstName} ${ride.driver.user.lastName}` : "Unassigned"}`, `Promo: ${ride.promoCode?.code ?? "None"}`
+  ]);
+  res.setHeader("content-type", "application/pdf");
+  res.setHeader("content-disposition", `attachment; filename="${receiptNumber}.pdf"`);
+  res.setHeader("cache-control", "private, no-store");
+  res.send(pdf);
+}));
+
+api.get("/rides/:id/chat", authenticate, asyncRoute(async (req, res) => {
+  const ride = await prisma.ride.findUnique({ where: { id: req.params.id }, include: { driver: true } });
+  if (!ride || (ride.passengerId !== req.user!.sub && ride.driver?.userId !== req.user!.sub)) return res.status(404).json({ error: { code: "CHAT_NOT_FOUND", message: "Ride chat not found" } });
+  const messages = await prisma.chatMessage.findMany({ where: { rideId: ride.id }, select: { id: true, senderId: true, content: true, readAt: true, createdAt: true }, orderBy: { createdAt: "asc" }, take: 500 });
+  await prisma.chatMessage.updateMany({ where: { rideId: ride.id, senderId: { not: req.user!.sub }, readAt: null }, data: { readAt: new Date() } });
+  res.json({ data: messages });
+}));
+
 api.post("/rides/:id/transitions", authenticate, authorize("PASSENGER", "DRIVER", "ADMIN", "SUPPORT"), asyncRoute(async (req, res) => {
   const input = z.object({
     status: z.enum(["SEARCHING", "DRIVER_ARRIVING", "DRIVER_ARRIVED", "PASSENGER_BOARDED", "IN_PROGRESS", "COMPLETED", "CANCELLED"]),
@@ -288,6 +335,16 @@ api.post("/rides/:id/transitions", authenticate, authorize("PASSENGER", "DRIVER"
       }
       const wallet = await tx.wallet.upsert({ where: { userId: ride.driver.userId }, update: {}, create: { userId: ride.driver.userId } });
       await tx.wallet.update({ where: { id: wallet.id }, data: { balanceMinor: { increment: earningsMinor }, transactions: { create: { type: "CREDIT", amountMinor: earningsMinor, balanceMinor: wallet.balanceMinor + earningsMinor, reference: `ride:${ride.id}`, idempotencyKey: `ride-earnings:${ride.id}`, description: "Driver ride earnings" } } } });
+    }
+    if (status === "COMPLETED") {
+      const referral = await tx.referral.findUnique({ where: { referredUserId: ride.passengerId } });
+      const completedRides = await tx.ride.count({ where: { passengerId: ride.passengerId, status: "COMPLETED" } });
+      if (referral?.status === "PENDING" && completedRides === 1) {
+        const referrerWallet = await tx.wallet.upsert({ where: { userId: referral.referrerId }, update: {}, create: { userId: referral.referrerId } });
+        await tx.wallet.update({ where: { id: referrerWallet.id }, data: { balanceMinor: { increment: REFERRAL_REWARD_MINOR }, transactions: { create: { type: "CREDIT", amountMinor: REFERRAL_REWARD_MINOR, balanceMinor: referrerWallet.balanceMinor + REFERRAL_REWARD_MINOR, reference: `referral:${referral.id}`, idempotencyKey: `referral-reward:${referral.id}`, description: "Passenger referral reward" } } } });
+        await tx.referral.update({ where: { id: referral.id }, data: { status: "REWARDED", rewardMinor: REFERRAL_REWARD_MINOR, qualifiedAt: now, rewardedAt: now } });
+        await tx.notification.createMany({ data: [{ userId: referral.referrerId, channel: "IN_APP", template: "referral-reward", title: "Referral reward earned", body: "Your referral completed their first ride. The reward is now in your wallet." }, { userId: referral.referrerId, channel: "PUSH", template: "referral-reward", title: "Referral reward earned", body: "Your referral reward is now in your wallet." }] });
+      }
     }
     return result;
   });
@@ -569,6 +626,23 @@ api.post("/devices", authenticate, asyncRoute(async (req, res) => {
   const input = z.object({ platform: z.enum(["ios", "android", "web"]), pushToken: z.string().min(20).max(500) }).parse(req.body);
   const device = await prisma.device.upsert({ where: { pushToken: input.pushToken }, update: { userId: req.user!.sub, platform: input.platform, active: true, lastSeenAt: new Date() }, create: { userId: req.user!.sub, ...input } });
   res.json({ data: device });
+}));
+
+api.delete("/devices/:id", authenticate, asyncRoute(async (req, res) => {
+  const disabled = await prisma.device.updateMany({ where: { id: req.params.id, userId: req.user!.sub, active: true }, data: { active: false } });
+  if (!disabled.count) return res.status(404).json({ error: { code: "DEVICE_NOT_FOUND", message: "Active device not found" } });
+  res.status(204).send();
+}));
+
+api.post("/admin/notifications", authenticate, authorize("ADMIN"), asyncRoute(async (req, res) => {
+  const input = z.object({ role: z.enum(["PASSENGER", "DRIVER", "FLEET_MANAGER", "DISPATCHER", "SUPPORT"]).optional(), userIds: z.array(z.uuid()).max(500).optional(), title: z.string().trim().min(3).max(120), body: z.string().trim().min(3).max(500), push: z.boolean().default(true) })
+    .refine((value) => Boolean(value.role) !== Boolean(value.userIds?.length), "Choose either a role or user IDs").parse(req.body);
+  const recipients = await prisma.user.findMany({ where: { status: "ACTIVE", ...(input.role ? { role: input.role } : { id: { in: input.userIds! } }) }, select: { id: true }, take: 5_000 });
+  if (!recipients.length) return res.status(422).json({ error: { code: "NO_RECIPIENTS", message: "No active recipients matched" } });
+  const rows = recipients.flatMap((user) => [{ userId: user.id, channel: "IN_APP" as const, template: "admin-broadcast", title: input.title, body: input.body }, ...(input.push ? [{ userId: user.id, channel: "PUSH" as const, template: "admin-broadcast", title: input.title, body: input.body }] : [])]);
+  await prisma.notification.createMany({ data: rows });
+  await writeAudit({ actorId: req.user!.sub, action: "ADMIN_NOTIFICATION_SENT", entityType: "Notification", ipAddress: req.ip, metadata: { recipients: recipients.length, role: input.role ?? null, push: input.push } });
+  res.status(202).json({ data: { recipients: recipients.length, notifications: rows.length } });
 }));
 
 api.post("/fleet/vehicles", authenticate, authorize("FLEET_MANAGER", "ADMIN"), asyncRoute(async (req, res) => {

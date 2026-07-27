@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { apiClient, money } from "@libswiftride/sdk";
+import { apiClient, money, supportedLocales, type SupportedLocale } from "@libswiftride/sdk";
 import { Map, Shell, Stat } from "@libswiftride/ui";
 import "@libswiftride/ui/styles.css";
 
@@ -26,6 +26,7 @@ type Ride = {
 };
 type Notification = { id: string; title: string; body: string; readAt: string | null };
 type FavouritePlace = { id: string; type: "HOME" | "WORK" | "CUSTOM"; label: string; address: string; latitude: number; longitude: number };
+type ChatMessage = { id: string; senderId: string; content: string; createdAt: string };
 
 const locations = {
   pickup: { address: "Broad Street, Monrovia", latitude: 6.3156, longitude: -10.8074 },
@@ -47,36 +48,55 @@ function App() {
   const [scheduledFor, setScheduledFor] = useState("");
   const [receipt, setReceipt] = useState<{ receiptNumber: string; fare: { subtotalMinor: number; discountMinor: number; totalMinor: number; currency: string } } | null>(null);
   const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [referralCode, setReferralCode] = useState("");
+  const trackingSocket = useRef<WebSocket | null>(null);
+  const [locale, setLocale] = useState<SupportedLocale>("en");
 
   async function loadDashboard() {
     if (!apiClient.hasSession()) return;
-    const [history, inbox, places] = await Promise.all([
+    const [history, inbox, places, referrals] = await Promise.all([
       apiClient.request<{ data: Ride[] }>("/rides?limit=10"),
       apiClient.request<{ data: Notification[]; meta: { unread: number } }>("/notifications?limit=5"),
-      apiClient.request<{ data: FavouritePlace[] }>("/favourite-places")
+      apiClient.request<{ data: FavouritePlace[] }>("/favourite-places"),
+      apiClient.request<{ data: { referralCode: string } }>("/referrals/me")
     ]);
     setRides(history.data);
     setNotifications(inbox.data);
     setUnread(inbox.meta.unread);
     setFavourites(places.data);
+    setReferralCode(referrals.data.referralCode);
   }
 
   useEffect(() => {
     loadDashboard().catch((error: Error) => setMessage(error.message));
   }, []);
 
+  useEffect(() => { document.documentElement.lang = locale; }, [locale]);
+
+  async function changeLocale(nextLocale: SupportedLocale) {
+    setLocale(nextLocale);
+    if (apiClient.hasSession()) await apiClient.request("/users/me/preferences", { method: "PATCH", body: JSON.stringify({ locale: nextLocale }) });
+  }
+
   useEffect(() => {
     if (!trackedRideId || !apiClient.hasSession()) return;
     const socket = apiClient.connect();
+    trackingSocket.current = socket;
+    apiClient.request<{ data: ChatMessage[] }>(`/rides/${trackedRideId}/chat`).then((response) => setChatMessages(response.data)).catch(() => setChatMessages([]));
     socket.addEventListener("open", () => socket.send(JSON.stringify({ type: "ride.subscribe", rideId: trackedRideId })));
     socket.addEventListener("message", (event) => {
-      const update = JSON.parse(event.data) as { type: string; latitude?: number; longitude?: number; etaSeconds?: number };
+      const update = JSON.parse(event.data) as { type: string; latitude?: number; longitude?: number; etaSeconds?: number; id?: string; senderId?: string; content?: string; createdAt?: string };
       if (update.type === "driver.location" && update.latitude != null && update.longitude != null) {
         setLiveLocation({ latitude: update.latitude, longitude: update.longitude });
         setEtaSeconds(update.etaSeconds ?? null);
       }
+      if (update.type === "chat.message" && update.id && update.senderId && update.content && update.createdAt) {
+        setChatMessages((current) => current.some((message) => message.id === update.id) ? current : [...current, { id: update.id!, senderId: update.senderId!, content: update.content!, createdAt: update.createdAt! }]);
+      }
     });
-    return () => socket.close();
+    return () => { trackingSocket.current = null; socket.close(); };
   }, [trackedRideId]);
 
   useEffect(() => {
@@ -168,11 +188,26 @@ function App() {
     } catch (error) { setMessage((error as Error).message); }
   }
 
+  function sendChat() {
+    if (!trackedRideId || !chatInput.trim() || trackingSocket.current?.readyState !== WebSocket.OPEN) return;
+    trackingSocket.current.send(JSON.stringify({ type: "chat.send", rideId: trackedRideId, content: chatInput }));
+    setChatInput("");
+  }
+
+  async function downloadReceipt(rideId: string) {
+    try {
+      const blob = await apiClient.download(`/rides/${rideId}/receipt.pdf`);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a"); anchor.href = url; anchor.download = `LibSwiftRide-${rideId.slice(0, 8)}.pdf`; anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (error) { setMessage((error as Error).message); }
+  }
+
   return (
     <Shell product="Passenger">
       <div className="toolbar">
         <div><span className="eyebrow">Passenger home</span><h1>Where to?</h1></div>
-        <a href="#history">Ride history</a>
+        <label>Language<select aria-label="Language" value={locale} onChange={(event) => changeLocale(event.target.value as SupportedLocale)}>{supportedLocales.map((value) => <option key={value} value={value}>{value === "en" ? "English" : "Français"}</option>)}</select></label>
       </div>
       {message && <p className={message.startsWith("Ride") ? "notice" : "notice error"}>{message}</p>}
       <section className="hero">
@@ -230,12 +265,18 @@ function App() {
               <td>{ride.status === "COMPLETED" && !ride.ratings.length
                 ? <span className="rating-actions">{[1, 2, 3, 4, 5].map((score) => <button key={score} onClick={() => rateRide(ride.id, score)} aria-label={`Rate ${score} stars`}>★</button>)}</span>
                 : ride.ratings[0]?.score ?? "—"}</td>
-              <td>{ride.status === "COMPLETED" && <button className="link-button" onClick={() => loadReceipt(ride.id)}>Receipt</button>}</td>
+              <td>{ride.status === "COMPLETED" && <><button className="link-button" onClick={() => loadReceipt(ride.id)}>View</button> · <button className="link-button" onClick={() => downloadReceipt(ride.id)}>PDF</button></>}</td>
             </tr>
           ))}</tbody>
         </table>
         {!rides.length && <p>Sign in to view bookings and receipts.</p>}
       </section>
+      {trackedRideId && <section className="panel" aria-live="polite">
+        <h2>Ride chat</h2>
+        <div>{chatMessages.map((chat) => <p key={chat.id}>{chat.content}<br /><small>{new Date(chat.createdAt).toLocaleTimeString("en-LR")}</small></p>)}</div>
+        <div className="form-row"><label>Message<input value={chatInput} maxLength={500} onChange={(event) => setChatInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") sendChat(); }} /></label><button className="action" onClick={sendChat}>Send</button></div>
+      </section>}
+      <section className="panel"><h2>Invite and earn</h2><p>Share referral code <strong>{referralCode || "Sign in to view your code"}</strong>. Rewards are issued after the referred passenger completes their first ride.</p></section>
       <section className="panel">
         <h2>Favourite places</h2>
         {favourites.map((place) => <p key={place.id}><strong>{place.label}</strong> · {place.address}</p>)}

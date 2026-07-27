@@ -13,9 +13,10 @@ import { verifyAccessToken } from "./auth.js";
 import { config } from "./config.js";
 import { prisma, redis } from "./lib.js";
 import { activateScheduledRides, updateDriverLocation } from "./services/dispatch.js";
-import { deliverPendingNotifications } from "./services/notifications.js";
+import { deliverPendingNotifications, queueNotification } from "./services/notifications.js";
 import { logger } from "./logger.js";
 import { distanceMetres, estimateEtaSeconds } from "./services/tracking.js";
+import { queueDocumentExpiryReminders } from "./services/document-reminders.js";
 
 const app = express();
 collectDefaultMetrics({ prefix: "libswiftride_" });
@@ -79,6 +80,8 @@ wss.on("connection", async (socket, request) => {
   const user = await verifyAccessToken(token).catch(() => null);
   if (!user) return socket.close(1008, "Authentication required");
   let lastLocationAt = 0;
+  let lastRoutePointAt = 0;
+  let lastChatAt = 0;
   socket.on("message", async (payload) => {
     try {
       const event = JSON.parse(payload.toString());
@@ -98,7 +101,10 @@ wss.on("connection", async (socket, request) => {
         const location = await updateDriverLocation(user.sub, event.latitude, event.longitude);
         const activeRide = await prisma.ride.findFirst({ where: { driverId: location.driverId, status: { in: ["DRIVER_ASSIGNED", "DRIVER_ARRIVING", "DRIVER_ARRIVED", "PASSENGER_BOARDED", "IN_PROGRESS"] } }, select: { id: true, status: true, pickupLatitude: true, pickupLongitude: true, destinationLatitude: true, destinationLongitude: true } });
         if (activeRide) {
-          await prisma.routePoint.create({ data: { rideId: activeRide.id, latitude: location.latitude, longitude: location.longitude, ...(Number.isInteger(event.heading) && event.heading >= 0 && event.heading <= 359 ? { heading: event.heading } : {}), ...(Number.isFinite(event.speedMps) && event.speedMps >= 0 && event.speedMps <= 100 ? { speedMps: event.speedMps } : {}) } });
+          if (Date.now() - lastRoutePointAt >= 10_000) {
+            lastRoutePointAt = Date.now();
+            await prisma.routePoint.create({ data: { rideId: activeRide.id, latitude: location.latitude, longitude: location.longitude, ...(Number.isInteger(event.heading) && event.heading >= 0 && event.heading <= 359 ? { heading: event.heading } : {}), ...(Number.isFinite(event.speedMps) && event.speedMps >= 0 && event.speedMps <= 100 ? { speedMps: event.speedMps } : {}) } });
+          }
           const target = ["PASSENGER_BOARDED", "IN_PROGRESS"].includes(activeRide.status)
             ? { latitude: Number(activeRide.destinationLatitude), longitude: Number(activeRide.destinationLongitude) }
             : { latitude: Number(activeRide.pickupLatitude), longitude: Number(activeRide.pickupLongitude) };
@@ -107,6 +113,20 @@ wss.on("connection", async (socket, request) => {
           for (const subscriber of rideSubscriptions.get(activeRide.id) ?? []) if (subscriber.readyState === 1) subscriber.send(message);
         }
         socket.send(JSON.stringify({ type: "location.ack", at: location.at }));
+      }
+      if (event.type === "chat.send" && typeof event.rideId === "string" && typeof event.content === "string") {
+        if (Date.now() - lastChatAt < 1_000) throw new Error("Chat rate exceeded");
+        lastChatAt = Date.now();
+        const content = event.content.trim();
+        if (!content || content.length > 500) throw new Error("Invalid chat content");
+        const ride = await prisma.ride.findUnique({ where: { id: event.rideId }, include: { driver: true } });
+        const participant = ride && (ride.passengerId === user.sub || ride.driver?.userId === user.sub);
+        if (!participant || ["REQUESTED", "SEARCHING", "COMPLETED", "CANCELLED"].includes(ride.status)) throw new Error("Chat unavailable");
+        const message = await prisma.chatMessage.create({ data: { rideId: ride.id, senderId: user.sub, content }, select: { id: true, rideId: true, senderId: true, content: true, createdAt: true } });
+        const payload = JSON.stringify({ type: "chat.message", ...message });
+        for (const subscriber of rideSubscriptions.get(ride.id) ?? []) if (subscriber.readyState === 1) subscriber.send(payload);
+        const recipientId = ride.passengerId === user.sub ? ride.driver!.userId : ride.passengerId;
+        await queueNotification({ userId: recipientId, channel: "PUSH", template: "ride-chat", title: "New ride message", body: "You have a new message from your ride participant.", data: { rideId: ride.id } }).catch(() => undefined);
       }
     } catch { socket.send(JSON.stringify({ type: "error", code: "INVALID_EVENT" })); }
   });
@@ -131,10 +151,15 @@ const scheduledRideTimer = setInterval(() => {
   activateScheduledRides().catch((error) => logger.error({ err: error }, "scheduled ride activation failed"));
 }, 30_000);
 scheduledRideTimer.unref();
+const documentReminderTimer = setInterval(() => {
+  queueDocumentExpiryReminders().catch((error) => logger.error({ err: error }, "document expiry reminder cycle failed"));
+}, 6 * 60 * 60_000);
+documentReminderTimer.unref();
 
 async function shutdown() {
   clearInterval(notificationTimer);
   clearInterval(scheduledRideTimer);
+  clearInterval(documentReminderTimer);
   server.close();
   await Promise.allSettled([prisma.$disconnect(), redis.quit()]);
 }

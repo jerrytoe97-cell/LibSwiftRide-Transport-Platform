@@ -34,6 +34,17 @@ export class LibSwiftRideClient {
     return body as T;
   }
 
+  async download(path: string) {
+    const headers = new Headers();
+    if (this.accessToken) headers.set("authorization", `Bearer ${this.accessToken}`);
+    const response = await fetch(`${API_URL}${path}`, { headers });
+    if (!response.ok) {
+      const body = await response.json().catch(() => undefined) as ApiError | undefined;
+      throw new Error(body?.error?.message ?? `Download failed (${response.status})`);
+    }
+    return response.blob();
+  }
+
   connect() {
     if (!this.accessToken) throw new Error("Sign in before connecting");
     const encoded = btoa(this.accessToken).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
@@ -42,5 +53,7 @@ export class LibSwiftRideClient {
 }
 
 export const apiClient = new LibSwiftRideClient();
-export const money = (minor: number, currency = "LRD") =>
-  new Intl.NumberFormat("en-LR", { style: "currency", currency }).format(minor / 100);
+export const supportedLocales = ["en", "fr"] as const;
+export type SupportedLocale = typeof supportedLocales[number];
+export const money = (minor: number, currency = "LRD", locale: SupportedLocale = "en") =>
+  new Intl.NumberFormat(locale === "fr" ? "fr-LR" : "en-LR", { style: "currency", currency }).format(minor / 100);

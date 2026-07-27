@@ -3,14 +3,15 @@ import "./styles.css";
 
 export function Shell({ product, children }: { product: string; children: ReactNode }) {
   return <div className="shell">
-    <header><a className="brand" href="/">LibSwift<span>Ride</span></a><span className="product">{product}</span></header>
-    <main>{children}</main>
+    <a className="skip-link" href="#main-content">Skip to main content</a>
+    <header><a className="brand" href="/" aria-label="LibSwiftRide home">LibSwift<span>Ride</span></a><span className="product">{product}</span></header>
+    <main id="main-content" tabIndex={-1}>{children}</main>
     <footer>Built for Liberia · Safety support available 24/7</footer>
   </div>;
 }
 
 export function Stat({ label, value, detail }: { label: string; value: string; detail?: string }) {
-  return <article className="stat"><span>{label}</span><strong>{value}</strong>{detail && <small>{detail}</small>}</article>;
+  return <article className="stat" aria-label={`${label}: ${value}`}><span>{label}</span><strong>{value}</strong>{detail && <small>{detail}</small>}</article>;
 }
 
 export function Action({ children, className = "", ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {

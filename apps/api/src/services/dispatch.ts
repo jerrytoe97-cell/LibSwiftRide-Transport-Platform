@@ -46,7 +46,15 @@ export async function matchDriver(rideId: string) {
       await tx.rideEvent.create({ data: { rideId, type: "DRIVER_ASSIGNED", metadata: { driverId } } });
       return tx.ride.findUnique({ where: { id: rideId }, include: { driver: { include: { user: true, vehicle: true } } } });
     });
-    if (assigned) return assigned;
+    if (assigned) {
+      const driverNotice = { userId: assigned.driver!.userId, template: "ride-assigned", title: "New ride assignment", body: `Pickup at ${assigned.pickupAddress}. Open the driver app to accept.` };
+      const passengerNotice = { userId: assigned.passengerId, template: "driver-assigned", title: "Driver assigned", body: "A verified driver has been assigned to your ride." };
+      await prisma.notification.createMany({ data: [
+        { ...driverNotice, channel: "IN_APP" }, { ...driverNotice, channel: "PUSH" },
+        { ...passengerNotice, channel: "IN_APP" }, { ...passengerNotice, channel: "PUSH" }
+      ] }).catch(() => undefined);
+      return assigned;
+    }
   }
   return null;
 }
@@ -62,6 +70,11 @@ export async function activateScheduledRides(now = new Date()) {
     const activated = await prisma.ride.updateMany({ where: { id: ride.id, status: "REQUESTED" }, data: { status: "SEARCHING" } });
     if (activated.count) {
       await prisma.rideEvent.create({ data: { rideId: ride.id, type: "SCHEDULED_RIDE_ACTIVATED" } });
+      const reservation = await prisma.ride.findUnique({ where: { id: ride.id }, select: { passengerId: true, pickupAddress: true } });
+      if (reservation) await prisma.notification.createMany({ data: [
+        { userId: reservation.passengerId, channel: "IN_APP", template: "reservation-active", title: "Scheduled ride is starting", body: `We are finding a driver for your pickup at ${reservation.pickupAddress}.` },
+        { userId: reservation.passengerId, channel: "PUSH", template: "reservation-active", title: "Scheduled ride is starting", body: "We are finding a driver for your scheduled ride." }
+      ] }).catch(() => undefined);
       void matchDriver(ride.id);
     }
   }

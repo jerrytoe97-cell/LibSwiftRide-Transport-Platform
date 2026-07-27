@@ -145,6 +145,13 @@ model User {
   lastName     String
   role         UserRole
   status       UserStatus @default(PENDING)
+  locale       String     @default("en")
+  referralCode String     @unique @default(uuid())
+  referredById String?
+  referredBy   User?      @relation("UserReferrals", fields: [referredById], references: [id])
+  referrals    User[]     @relation("UserReferrals")
+  referralRewards Referral[] @relation("ReferralOwner")
+  referralRecord Referral? @relation("ReferredUser")
   driver       Driver?
   fleet        Fleet?     @relation("FleetManager")
   rides        Ride[]     @relation("PassengerRides")
@@ -159,6 +166,7 @@ model User {
   favouritePlaces FavouritePlace[]
   emergencyContacts EmergencyContact[]
   tripShares    TripShare[] @relation("TripShareOwner")
+  chatMessages  ChatMessage[]
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 }
@@ -282,6 +290,7 @@ model Ride {
   safetyIncidents        SafetyIncident[]
   tripShares             TripShare[]
   refunds                Refund[]
+  chatMessages           ChatMessage[]
   @@unique([passengerId, idempotencyKey])
   @@index([status, requestedAt])
   @@index([driverId, status])
@@ -299,6 +308,33 @@ model RideEvent {
   metadata  Json?
   createdAt DateTime @default(now())
   @@index([rideId, createdAt])
+}
+
+model ChatMessage {
+  id        String   @id @default(uuid())
+  rideId    String
+  ride      Ride     @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  senderId  String
+  sender    User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  content   String
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+  @@index([rideId, createdAt])
+  @@index([senderId, createdAt])
+}
+
+model Referral {
+  id             String   @id @default(uuid())
+  referrerId     String
+  referrer       User     @relation("ReferralOwner", fields: [referrerId], references: [id])
+  referredUserId String   @unique
+  referredUser   User     @relation("ReferredUser", fields: [referredUserId], references: [id])
+  status         String   @default("PENDING")
+  rewardMinor    Int      @default(0)
+  qualifiedAt    DateTime?
+  rewardedAt     DateTime?
+  createdAt      DateTime @default(now())
+  @@index([referrerId, status])
 }
 
 model RoutePoint {
@@ -560,8 +596,10 @@ model KycDocument {
   checksum    String
   expiresAt   DateTime?
   verifiedAt  DateTime?
+  expiryReminderSentAt DateTime?
   createdAt   DateTime        @default(now())
   @@unique([kycCaseId, type])
+  @@index([expiryReminderSentAt, expiresAt])
 }
 
 model AuditLog {

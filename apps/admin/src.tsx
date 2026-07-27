@@ -48,6 +48,9 @@ function App() {
   const [reviews, setReviews] = useState<Review[]>([]);
   const [kycCases, setKycCases] = useState<KycCase[]>([]);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
+  const [broadcastTitle, setBroadcastTitle] = useState("");
+  const [broadcastBody, setBroadcastBody] = useState("");
+  const [broadcastRole, setBroadcastRole] = useState("PASSENGER");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -80,6 +83,13 @@ function App() {
   async function reviewKyc(id: string, decision: "APPROVED" | "REJECTED") {
     await apiClient.request(`/admin/kyc/${id}/review`, { method: "POST", body: JSON.stringify({ decision, ...(decision === "REJECTED" ? { rejectionCode: "DOCUMENT_REVIEW_REQUIRED" } : {}) }) });
     window.location.reload();
+  }
+
+  async function sendBroadcast() {
+    try {
+      await apiClient.request("/admin/notifications", { method: "POST", body: JSON.stringify({ role: broadcastRole, title: broadcastTitle, body: broadcastBody, push: true }) });
+      setBroadcastTitle(""); setBroadcastBody("");
+    } catch (requestError) { setError((requestError as Error).message); }
   }
 
   return (
@@ -131,6 +141,15 @@ function App() {
         <h2>Driver approvals</h2>
         {kycCases.map((kyc) => <div className="toolbar" key={kyc.id}><span>{kyc.driver.user.firstName} {kyc.driver.user.lastName}</span><span><button className="action" onClick={() => reviewKyc(kyc.id, "APPROVED")}>Approve</button> <button className="link-button" onClick={() => reviewKyc(kyc.id, "REJECTED")}>Reject</button></span></div>)}
         {!kycCases.length && <p>No submitted driver cases.</p>}
+      </section>
+      <section className="panel">
+        <h2>Admin notifications</h2>
+        <div className="form">
+          <label>Audience<select value={broadcastRole} onChange={(event) => setBroadcastRole(event.target.value)}><option value="PASSENGER">Passengers</option><option value="DRIVER">Drivers</option><option value="FLEET_MANAGER">Fleet managers</option><option value="DISPATCHER">Dispatchers</option><option value="SUPPORT">Support</option></select></label>
+          <label>Title<input value={broadcastTitle} maxLength={120} onChange={(event) => setBroadcastTitle(event.target.value)} /></label>
+          <label>Message<textarea value={broadcastBody} maxLength={500} onChange={(event) => setBroadcastBody(event.target.value)} /></label>
+          <button className="action" onClick={sendBroadcast} disabled={!broadcastTitle.trim() || !broadcastBody.trim()}>Send in-app and sandbox push</button>
+        </div>
       </section>
       <section className="panel">
         <h2>Passenger management</h2>

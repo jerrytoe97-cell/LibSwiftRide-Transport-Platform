@@ -16,6 +16,8 @@ Implemented foundation endpoints:
 | GET | `/rides?limit=&cursor=&status=` | Passenger/driver history with cursor metadata |
 | GET | `/rides/:id` | Ride participant, support or admin |
 | GET | `/rides/:id/receipt` | Completed-ride participant, support or admin |
+| GET | `/rides/:id/receipt.pdf` | Authorized PDF receipt download |
+| GET | `/rides/:id/chat` | Assigned ride participant chat history |
 | POST | `/rides/:id/transitions` | Role-bound acceptance, arrival, boarding, start, completion and cancellation |
 | GET | `/rides/:id/tracking` | Participant/operations location and ETA |
 | GET | `/rides/:id/route-replay` | Participant/operations route replay |
@@ -28,6 +30,9 @@ Implemented foundation endpoints:
 | GET | `/drivers/me/earnings` | Driver |
 | GET | `/drivers/me/dashboard` | Driver consolidated operations summary |
 | GET/POST/DELETE | `/drivers/me/availability-schedule` | Driver-owned future availability windows |
+| GET | `/referrals/me` | Authenticated referral code and rewards |
+| PATCH | `/users/me/preferences` | Authenticated locale preference |
+| POST/DELETE | `/devices` | Authenticated push-device lifecycle |
 | POST | `/promos/validate` | Passenger promotion eligibility and bounded discount |
 | GET | `/notifications?limit=&unreadOnly=` | Authenticated notification inbox and unread count |
 | GET | `/dispatch/drivers` | Dispatcher/admin eligible available drivers |
@@ -40,6 +45,7 @@ Implemented foundation endpoints:
 | GET/POST/DELETE | `/safety/emergency-contacts` | User-owned emergency contacts |
 | GET/PATCH | `/safety/incidents` | Operations safety queue |
 | GET | `/admin/overview` | Admin |
+| POST | `/admin/notifications` | Audited role/user in-app and push broadcast |
 | GET | `/reports/analytics` | Admin/dispatcher operational and financial analytics |
 | GET | `/admin/promos` | Admin promotion utilization |
 | PATCH | `/admin/promos/:id` | Admin promotion lifecycle management |
@@ -52,5 +58,7 @@ Implemented foundation endpoints:
 | GET | `/admin/settings/payments` | Admin; returns configuration status, never account numbers |
 
 WebSocket endpoint `/ws` accepts the access token through an `auth.<base64url-token>` WebSocket subprotocol, keeping credentials out of URLs and proxy access logs. Driver locations bind to the verified token subject, and ride subscriptions require participant or operations access. Production should use very short-lived socket tickets when the client platform supports them and Redis pub/sub across replicas.
+
+Subscribed ride participants may send `chat.send` events with `rideId` and `content`; the server emits persisted `chat.message` events. Messages are limited to 500 characters and one send per second per connection.
 
 The `/openapi.json` endpoint is a placeholder document. Generate a complete contract from route schemas before public integration.
