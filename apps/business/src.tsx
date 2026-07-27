@@ -32,7 +32,7 @@ function App() {
       await load();
     } catch (error) { setMessage((error as Error).message); }
   }
-  return <Shell product="Business">
+  return <Shell product="Business" demoRole="BUSINESS_MANAGER">
     <span className="eyebrow">Corporate travel</span><h1>{account?.name ?? "Business account"}</h1>
     {loading && <p className="notice" role="status">Loading business account…</p>}
     {message && <p className="notice error">{message}</p>}

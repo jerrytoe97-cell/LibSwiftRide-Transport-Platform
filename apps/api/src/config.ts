@@ -19,6 +19,7 @@ const schema = z.object({
   ACCESS_TOKEN_TTL: z.string().default("15m"),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
   PAYMENTS_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  DEMO_MODE: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   PAYMENT_PROVIDER: z.enum(["sandbox", "mobile-money"]).default("sandbox"),
   PAYMENT_WEBHOOK_SECRET: z.string().min(16),
   NOTIFICATION_PROVIDER: z.enum(["sandbox", "hooks"]).default("sandbox"),
@@ -38,6 +39,9 @@ const schema = z.object({
   PUSH_DELIVERY_TOKEN: optionalSecret,
   METRICS_TOKEN: optionalSecret
 }).superRefine((environment, context) => {
+  if (environment.NODE_ENV === "production" && environment.DEMO_MODE) {
+    context.addIssue({ code: "custom", path: ["DEMO_MODE"], message: "Demo mode is forbidden in production" });
+  }
   if (environment.NODE_ENV === "production" && !environment.METRICS_TOKEN) {
     context.addIssue({ code: "custom", path: ["METRICS_TOKEN"], message: "METRICS_TOKEN is required in production" });
   }

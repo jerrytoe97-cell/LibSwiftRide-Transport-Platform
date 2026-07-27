@@ -84,6 +84,28 @@ api.post("/auth/logout", asyncRoute(async (req, res) => {
   res.status(204).send();
 }));
 
+const demoAccounts = {
+  PASSENGER: "+231000000001",
+  DRIVER: "+231000000002",
+  ADMIN: "+231000000003",
+  DISPATCHER: "+231000000004",
+  FLEET_MANAGER: "+231000000005",
+  BUSINESS_MANAGER: "+231000000006"
+} as const;
+
+api.post("/auth/demo-login", asyncRoute(async (req, res) => {
+  if (!config.DEMO_MODE || config.NODE_ENV === "production") {
+    return res.status(404).json({ error: { code: "NOT_FOUND", message: "Route not found" } });
+  }
+  const role = z.enum(["PASSENGER", "DRIVER", "ADMIN", "DISPATCHER", "FLEET_MANAGER", "BUSINESS_MANAGER"]).parse(req.body?.role);
+  const user = await prisma.user.findUnique({ where: { phone: demoAccounts[role] }, select: { id: true, role: true, firstName: true, lastName: true, status: true } });
+  if (!user || user.role !== role || user.status !== "ACTIVE") {
+    return res.status(503).json({ error: { code: "DEMO_ACCOUNT_UNAVAILABLE", message: "Run the demo seed before using one-click login" } });
+  }
+  await writeAudit({ actorId: user.id, action: "DEMO_LOGIN", entityType: "User", entityId: user.id, ipAddress: req.ip });
+  res.json({ data: { id: user.id, role: user.role, firstName: user.firstName, lastName: user.lastName }, tokens: await issueTokens({ sub: user.id, role: user.role }) });
+}));
+
 api.get("/auth/sessions", authenticate, asyncRoute(async (req, res) => {
   const sessions = await prisma.refreshToken.findMany({ where: { userId: req.user!.sub, revokedAt: null, expiresAt: { gt: new Date() } }, select: { id: true, createdAt: true, expiresAt: true }, orderBy: { createdAt: "desc" } });
   res.json({ data: sessions });

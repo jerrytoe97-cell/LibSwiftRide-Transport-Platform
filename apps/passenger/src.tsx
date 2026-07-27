@@ -224,7 +224,7 @@ function App() {
   }
 
   return (
-    <Shell product="Passenger">
+    <Shell product="Passenger" demoRole="PASSENGER">
       <div className="toolbar">
         <div><span className="eyebrow">Passenger home</span><h1>Where to?</h1></div>
         <label>Language<select aria-label="Language" value={locale} onChange={(event) => changeLocale(event.target.value as SupportedLocale)}>{supportedLocales.map((value) => <option key={value} value={value}>{value === "en" ? "English" : "Français"}</option>)}</select></label>

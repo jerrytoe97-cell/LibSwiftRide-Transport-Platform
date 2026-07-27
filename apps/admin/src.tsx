@@ -110,7 +110,7 @@ function App() {
   }
 
   return (
-    <Shell product="Admin">
+    <Shell product="Admin" demoRole="ADMIN">
       <div className="toolbar">
         <div><span className="eyebrow">Live operations</span><h1>Monrovia at a glance.</h1></div>
         <span>Safety · Payments · Access · Audit</span>

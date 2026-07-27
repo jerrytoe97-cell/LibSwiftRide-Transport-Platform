@@ -141,7 +141,7 @@ function App() {
   const online = dashboard?.driver.status === "AVAILABLE";
   const activeNextStatus = dashboard?.activeRide ? nextStatus[dashboard.activeRide.status] : undefined;
   return (
-    <Shell product="Driver">
+    <Shell product="Driver" demoRole="DRIVER">
       <div className="toolbar">
         <div><span className="eyebrow">Driver home</span><h1>Earn on your schedule.</h1></div>
         <Action onClick={() => setAvailability(online ? "OFFLINE" : "AVAILABLE")}>{online ? "Go offline" : "Go online"}</Action>

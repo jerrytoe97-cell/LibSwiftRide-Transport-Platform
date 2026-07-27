@@ -47,7 +47,7 @@ function App() {
 
   const drivers = fleets.flatMap((fleet) => fleet.drivers);
   const vehicles = fleets.flatMap((fleet) => fleet.vehicles);
-  return <Shell product="Fleet">
+  return <Shell product="Fleet" demoRole="FLEET_MANAGER">
     <span className="eyebrow">Fleet owner portal</span><h1>Keep every driver and vehicle moving.</h1>
     {loading && <p className="notice" role="status">Loading fleet operations…</p>}
     {error && <p className="notice error">{error}</p>}

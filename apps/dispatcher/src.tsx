@@ -51,7 +51,7 @@ function App() {
 
   const searching = rides.filter((ride) => ride.status === "SEARCHING").length;
   return (
-    <Shell product="Dispatcher">
+    <Shell product="Dispatcher" demoRole="DISPATCHER">
       <span className="eyebrow">Live dispatch</span><h1>Move every ride forward.</h1>
       {error && <p className="notice error">{error}</p>}
       <div className="grid">
