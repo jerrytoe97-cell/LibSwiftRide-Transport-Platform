@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { apiClient, money, supportedLocales, type SupportedLocale } from "@libswiftride/sdk";
+import { apiClient, message as translatedMessage, money, rideStatusLabel, supportedLocales, type SupportedLocale } from "@libswiftride/sdk";
 import { Map, Shell, Stat } from "@libswiftride/ui";
 import "@libswiftride/ui/styles.css";
 
@@ -232,8 +232,8 @@ function App() {
       {message && <p className={message.startsWith("Ride") ? "notice" : "notice error"}>{message}</p>}
       <section className="hero">
         <div className="panel form">
-          <label>Pickup<input value={locations.pickup.address} readOnly /></label>
-          <label>Destination<input value={locations.destination.address} readOnly /></label>
+          <label>{translatedMessage(locale, "pickup")}<input value={locations.pickup.address} readOnly /></label>
+          <label>{translatedMessage(locale, "destination")}<input value={locations.destination.address} readOnly /></label>
           <label>Promo code<input value={promo} onChange={(event) => setPromo(event.target.value)} placeholder="Optional" /></label>
           <label>Schedule for later<input type="datetime-local" value={scheduledFor} onChange={(event) => setScheduledFor(event.target.value)} /></label>
           <div className="toolbar">
@@ -241,7 +241,7 @@ function App() {
             <button className="link-button" onClick={() => saveFavourite("WORK", "Work", locations.destination)}>Save destination as Work</button>
           </div>
           <label>
-            Payment
+            {translatedMessage(locale, "payment")}
             <select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value as PaymentMethod)}>
               <option value="CASH">Cash</option>
               <option value="ORANGE_MONEY">Orange Money</option>
@@ -257,8 +257,8 @@ function App() {
             </div>
           )}
           <div className="toolbar">
-            <button className="action" onClick={getQuote}>Get estimate</button>
-            {quote && <button className="action" onClick={book}>Book now</button>}
+            <button className="action" onClick={getQuote}>{translatedMessage(locale, "getEstimate")}</button>
+            {quote && <button className="action" onClick={book}>{translatedMessage(locale, "bookRide")}</button>}
           </div>
           {quote && (
             <div className="grid">
@@ -277,7 +277,7 @@ function App() {
           <tbody>{rides.map((ride) => (
             <tr key={ride.id}>
               <td>{ride.pickupAddress} → {ride.destinationAddress}</td>
-              <td><button className="link-button" onClick={() => setTrackedRideId(ride.id)}>{ride.status.replaceAll("_", " ")}</button>
+              <td><button className="link-button" onClick={() => setTrackedRideId(ride.id)}>{rideStatusLabel(ride.status, locale)}</button>
                 {ride.status === "DRIVER_ARRIVED" && <button className="link-button" onClick={() => transitionRide(ride.id, "PASSENGER_BOARDED")}>I have boarded</button>}
                 {!["COMPLETED", "CANCELLED"].includes(ride.status) && <><button className="link-button" onClick={() => shareTrip(ride.id)}>Share</button><button onClick={() => sos(ride.id)}>SOS</button><button className="link-button" onClick={() => transitionRide(ride.id, "CANCELLED")}>Cancel</button></>}
               </td>

@@ -31,3 +31,9 @@ Target RPO is 15 minutes and RTO is 60 minutes. A recovery incident requires:
 7. Document actual RPO/RTO and corrective actions.
 
 Destructive restore operations require incident-commander and database-owner approval.
+
+## Restore drill evidence
+
+For each staging drill, record the source recovery point, target isolated database, operator, timestamps and checksums. Restore the provider-managed snapshot or PITR point, then run `pnpm db:deploy` against the isolated target. Compare counts and totals for `Ride`, `Payment`, `Refund`, `WalletTransaction`, `DriverPayout` and `AuditLog`; verify every completed ride has a balanced 88/12 allocation and that wallet transaction balances reconcile. Exercise `/health/ready` and a sandbox booking before declaring the restore usable. Never overwrite the source database during a drill.
+
+Application rollback keeps additive Phase 5/6 tables and nullable columns in place. If a migration defect affects writes, disable traffic, restore the previous immutable application, and ship a reviewed forward corrective migration. Use PITR only when a forward correction cannot preserve integrity and the incident commander accepts reconciliation of provider events after the recovery point.

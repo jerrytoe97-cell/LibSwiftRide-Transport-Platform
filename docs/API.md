@@ -38,6 +38,7 @@ Implemented foundation endpoints:
 | GET | `/dispatch/drivers` | Dispatcher/admin eligible available drivers |
 | GET | `/payments/mobile-money/:method/display` | Passenger; intentionally returns only the selected payment number |
 | POST | `/payments/webhooks/:provider` | Signed provider request |
+| POST | `/payments/:id/confirm-mobile-money` | Admin/support manual confirmation; requires `Idempotency-Key` and evidence reference |
 | POST | `/rides/:id/refunds` | Admin/support idempotent refund request |
 | PATCH | `/admin/refunds/:id` | Admin refund review |
 | GET | `/drivers/me/payouts` | Driver payout history |

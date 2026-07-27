@@ -1,12 +1,22 @@
 # Launch-readiness report
 
-**Decision: NOT READY for production. Conditionally ready for a controlled staging deployment after the open staging gates below are evidenced.**
+**Decision: NOT READY for production. Code-ready for an isolated Wednesday staging candidate only if the final Phase 6 validation passes and the runtime gates below are evidenced.**
 
-Review date: 2026-07-26
+Review date: 2026-07-28
 
-Review target: local `main..development` change set corresponding to the requested PR #5 review
+Review target: `phase-2-development` Phase 6 pre-deployment hardening
 
-Limitation: GitHub PR metadata, review threads and hosted check results were unavailable from this environment. The local `development` branch was aligned with `origin/development` when review began; PR #5 must be reconciled to that SHA before approval.
+Limitation: this phase intentionally did not create a pull request, deploy, configure Render/domains, or enable live payment APIs. Hosted CI and staging runtime evidence must be tied to the final Phase 6 commit.
+
+## Phase 6 acceptance delta
+
+- Added PostgreSQL/Redis-backed HTTP acceptance journeys for passenger verification, driver KYC approval, booking/dispatch, the full ride lifecycle, SOS, settlement, cancellation/refund replay, manual Mobile Money confirmation, corporate/fleet ownership and privileged operations.
+- Added a router-wide authentication contract test plus explicit critical-role assertions.
+- Revalidates live account status and role for every bearer request, preventing suspended accounts or stale role claims from retaining access.
+- Added provider timeout/transient retry policy and durable notification backoff with a five-attempt cap.
+- Added durable, audited and idempotent manual Mobile Money confirmation without enabling provider APIs.
+- Added shared English/French status vocabulary, responsive controls and clearer loading/empty states.
+- Added `ACCEPTANCE_TEST_REPORT.md` with external blockers and staging conditions.
 
 ## Readiness summary
 
@@ -18,7 +28,7 @@ Limitation: GitHub PR metadata, review threads and hosted check results were una
 | Docker | Conditional | Multi-stage non-root API image and local Compose health/dependency configuration exist. A successful clean container build and runtime smoke result is required for the reviewed SHA. Compose defaults are for development, not staging secrets. |
 | Render | Conditional | Blueprint includes managed PostgreSQL/Redis, API pre-deploy migrations, readiness and six static frontends. Exact origins/URLs, protected deploy hooks, plan capacity, domains/TLS and rollback evidence remain external gates. |
 | Health and metrics | Code pass; runtime evidence required | Liveness is process-only. Readiness now requires PostgreSQL and Redis. Production config requires a protected metrics token. Exercise 200/503 and metrics 401/200 behavior in staging. |
-| Passenger/driver/fleet/dispatcher/admin flows | Partial | REST authorization and domain services exist, but full browser/device end-to-end automation is absent. Execute every role scenario in `STAGING_CHECKLIST.md`; do not treat build-only frontend tests as launch evidence. |
+| Passenger/driver/fleet/dispatcher/admin flows | API acceptance pass pending final run; browser/device gate open | Database-backed HTTP journeys now cover core roles and ownership. Real-device GPS, browser maps, accessibility and poor-network evidence remain staging gates. |
 | 88% driver / 12% platform | Pass in domain code | API constants are 8,800/1,200 basis points; company share rounds once and driver receives the remainder. Unit tests enforce exact allocation and cent preservation; DB enforces nonnegative balanced splits. |
 | Payments disabled without credentials | Pass in code | `PAYMENTS_ENABLED=false` is the default and Render value. Orange Money, MTN MoMo and Stripe calls are rejected while disabled; cash remains available. Production enablement also requires the non-sandbox adapter mode. |
 | Logging and monitoring | Conditional | Pino JSON, request IDs, redaction, Prometheus metrics and alert definitions exist. Configure a restricted sink, dashboards, retention and a tested paging route. |
@@ -62,7 +72,7 @@ Limitation: GitHub PR metadata, review threads and hosted check results were una
 
 ## Production blockers
 
-1. Full browser/device end-to-end suites and recorded staging execution for all five authenticated roles.
+1. Recorded browser/device staging execution for passenger, driver, fleet, dispatcher, admin and business experiences; API HTTP automation does not replace real-device GPS/map validation.
 2. Orange Money Liberia and Lonestar Cell MTN certification, official endpoints, signed callback contracts and settlement/refund tests.
 3. Stripe account eligibility and an approved Liberia settlement arrangement.
 4. Transactional email, SMS and push providers with verified sender identities and delivery receipt/retry tests.
@@ -76,6 +86,6 @@ Limitation: GitHub PR metadata, review threads and hosted check results were una
 
 ## Staging approval rule
 
-Deploy only an immutable reviewed SHA from `development`. Keep `PAYMENTS_ENABLED=false`. Complete the change-control, environment, database, deployment/health and non-provider role-flow sections of `STAGING_CHECKLIST.md`. Any failed authorization, trip-state, money-allocation, migration, readiness or secret-control test blocks staging promotion.
+Deploy only an immutable reviewed SHA from `phase-2-development` after explicit approval. Keep `PAYMENTS_ENABLED=false`. Complete the change-control, environment, database, deployment/health and non-provider role-flow sections of `STAGING_CHECKLIST.md`. Any failed authorization, trip-state, money-allocation, migration, readiness or secret-control test blocks staging promotion.
 
 This report does not approve merging PR #5 or promoting to production.

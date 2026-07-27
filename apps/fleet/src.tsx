@@ -13,6 +13,7 @@ function App() {
   const [report, setReport] = useState<Report | null>(null);
   const [driverId, setDriverId] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
 
   async function load() {
     const to = new Date();
@@ -23,9 +24,10 @@ function App() {
     ]);
     setFleets(overview.data);
     setReport(operations.data);
+    setLoading(false);
   }
 
-  useEffect(() => { load().catch((requestError: Error) => setError(requestError.message)); }, []);
+  useEffect(() => { load().catch((requestError: Error) => { setError(requestError.message); setLoading(false); }); }, []);
 
   async function assignDriver() {
     if (!fleets[0] || !driverId) return;
@@ -47,6 +49,7 @@ function App() {
   const vehicles = fleets.flatMap((fleet) => fleet.vehicles);
   return <Shell product="Fleet">
     <span className="eyebrow">Fleet owner portal</span><h1>Keep every driver and vehicle moving.</h1>
+    {loading && <p className="notice" role="status">Loading fleet operations…</p>}
     {error && <p className="notice error">{error}</p>}
     <div className="grid">
       <Stat label="Online drivers" value={String(drivers.filter((driver) => driver.status === "AVAILABLE").length)} detail={`${drivers.length} managed drivers`} />
@@ -59,10 +62,11 @@ function App() {
       <label>Driver ID<input value={driverId} onChange={(event) => setDriverId(event.target.value)} /></label>
       <button className="action" onClick={assignDriver} disabled={!driverId}>Assign driver</button>
     </div></section>
-    <section className="panel"><h2>Managed drivers</h2>
+    <section className="panel" aria-busy={loading}><h2>Managed drivers</h2>
       <table><thead><tr><th>Driver</th><th>Vehicle</th><th>Status</th><th>Action</th></tr></thead><tbody>
         {drivers.map((driver) => <tr key={driver.id}><td>{driver.user.firstName} {driver.user.lastName}</td><td>{driver.vehicle?.plateNumber ?? "Unassigned"}</td><td>{driver.status}</td><td><button className="link-button" disabled={driver.status === "ON_TRIP"} onClick={() => removeDriver(driver.id)}>Remove</button></td></tr>)}
       </tbody></table>
+      {!loading && !drivers.length && <p>No drivers are assigned to this fleet yet.</p>}
     </section>
     <section className="panel"><h2>Vehicles</h2>
       <table><thead><tr><th>Vehicle</th><th>Plate</th><th>Status</th></tr></thead><tbody>{vehicles.map((vehicle) => <tr key={vehicle.id}><td>{vehicle.make} {vehicle.model}</td><td>{vehicle.plateNumber}</td><td>{vehicle.active ? "Active" : "Inactive"}</td></tr>)}</tbody></table>

@@ -443,9 +443,21 @@ model Payment {
   capturedAt      DateTime?
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
-  refunds         Refund[]
+  refunds            Refund[]
+  manualConfirmation ManualPaymentConfirmation?
 
   @@index([status, createdAt(sort: Desc)])
+}
+
+model ManualPaymentConfirmation {
+  id                String   @id @default(uuid())
+  paymentId         String   @unique
+  payment           Payment  @relation(fields: [paymentId], references: [id])
+  idempotencyKey    String   @unique
+  providerReference String
+  evidenceReference String
+  confirmedById     String
+  createdAt         DateTime @default(now())
 }
 
 model Refund {
@@ -759,9 +771,12 @@ model Notification {
   data      Json?
   sentAt    DateTime?
   readAt    DateTime?
+  attemptCount Int               @default(0)
+  nextAttemptAt DateTime?
   createdAt DateTime            @default(now())
 
   @@index([userId, status, createdAt])
+  @@index([status, nextAttemptAt])
 }
 
 model Device {

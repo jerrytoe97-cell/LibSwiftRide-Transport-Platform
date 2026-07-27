@@ -55,5 +55,17 @@ export class LibSwiftRideClient {
 export const apiClient = new LibSwiftRideClient();
 export const supportedLocales = ["en", "fr"] as const;
 export type SupportedLocale = typeof supportedLocales[number];
+export const messages = {
+  en: { loading: "Loading", empty: "Nothing to show yet", retry: "Try again", pickup: "Pickup", destination: "Destination", payment: "Payment", bookRide: "Book now", getEstimate: "Get estimate", rideStatus: "Ride status" },
+  fr: { loading: "Chargement", empty: "Aucun élément à afficher", retry: "Réessayer", pickup: "Lieu de départ", destination: "Destination", payment: "Paiement", bookRide: "Réserver", getEstimate: "Obtenir une estimation", rideStatus: "Statut de la course" }
+} as const satisfies Record<SupportedLocale, Record<string, string>>;
+export const message = (locale: SupportedLocale, key: keyof typeof messages.en) => messages[locale][key];
+export const rideStatusLabel = (status: string, locale: SupportedLocale) => {
+  const labels: Record<SupportedLocale, Record<string, string>> = {
+    en: { REQUESTED: "Requested", SEARCHING: "Finding a driver", DRIVER_ASSIGNED: "Driver assigned", DRIVER_ARRIVING: "Driver arriving", DRIVER_ARRIVED: "Driver arrived", PASSENGER_BOARDED: "Passenger boarded", IN_PROGRESS: "Trip in progress", COMPLETED: "Completed", CANCELLED: "Cancelled" },
+    fr: { REQUESTED: "Demandée", SEARCHING: "Recherche d’un chauffeur", DRIVER_ASSIGNED: "Chauffeur assigné", DRIVER_ARRIVING: "Chauffeur en route", DRIVER_ARRIVED: "Chauffeur arrivé", PASSENGER_BOARDED: "Passager à bord", IN_PROGRESS: "Course en cours", COMPLETED: "Terminée", CANCELLED: "Annulée" }
+  };
+  return labels[locale][status] ?? status.replaceAll("_", " ");
+};
 export const money = (minor: number, currency = "LRD", locale: SupportedLocale = "en") =>
   new Intl.NumberFormat(locale === "fr" ? "fr-LR" : "en-LR", { style: "currency", currency }).format(minor / 100);

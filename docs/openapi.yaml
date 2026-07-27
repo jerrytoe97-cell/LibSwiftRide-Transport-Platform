@@ -57,6 +57,22 @@ paths:
       security: [{ bearerAuth: [] }]
       summary: List the passenger's monthly passes and remaining credits
       responses: { "200": { description: Ride passes } }
+  /payments/{id}/confirm-mobile-money:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Manually confirm a pending Mobile Money payment with audited evidence
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, minLength: 8 }
+      responses:
+        "200": { description: Payment confirmed or idempotently replayed }
+        "409": { description: Payment is not confirmable or key was reused }
   /reports/advanced:
     get:
       security: [{ bearerAuth: [] }]

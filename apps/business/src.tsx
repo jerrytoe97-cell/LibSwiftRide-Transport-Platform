@@ -12,11 +12,13 @@ function App() {
   const [userId, setUserId] = useState("");
   const [monthlyLimitMinor, setMonthlyLimitMinor] = useState(50_000);
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(true);
   async function load() {
     const response = await apiClient.request<{ data: Account }>("/corporate/account");
     setAccount(response.data);
+    setLoading(false);
   }
-  useEffect(() => { load().catch((error: Error) => setMessage(error.message)); }, []);
+  useEffect(() => { load().catch((error: Error) => { setMessage(error.message); setLoading(false); }); }, []);
   async function addEmployee() {
     if (!account) return;
     try {
@@ -32,6 +34,7 @@ function App() {
   }
   return <Shell product="Business">
     <span className="eyebrow">Corporate travel</span><h1>{account?.name ?? "Business account"}</h1>
+    {loading && <p className="notice" role="status">Loading business account…</p>}
     {message && <p className="notice error">{message}</p>}
     <div className="grid">
       <Stat label="Monthly spend" value={money(account?.currentMonth.spendMinor ?? 0)} detail={`${account?.currentMonth.rides ?? 0} employee rides`} />
@@ -42,8 +45,9 @@ function App() {
       <div className="form-row"><label>Passenger user ID<input value={userId} onChange={(event) => setUserId(event.target.value)} /></label><label>Monthly limit (minor units)<input type="number" min="1" value={monthlyLimitMinor} onChange={(event) => setMonthlyLimitMinor(Number(event.target.value))} /></label></div>
       <button className="action" onClick={addEmployee} disabled={!userId}>Add employee</button>
     </section>
-    <section className="panel"><h2>Employee ride policy</h2>
+    <section className="panel" aria-busy={loading}><h2>Employee ride policy</h2>
       <table><thead><tr><th>Employee</th><th>Email</th><th>Monthly limit</th><th>Status</th><th>Action</th></tr></thead><tbody>{account?.employees.map((employee) => <tr key={employee.id}><td>{employee.user.firstName} {employee.user.lastName}</td><td>{employee.user.email ?? "—"}</td><td>{money(employee.monthlyLimitMinor)}</td><td>{employee.active ? "Active" : "Disabled"}</td><td><button className="link-button" onClick={() => toggleEmployee(employee)}>{employee.active ? "Disable" : "Enable"}</button></td></tr>)}</tbody></table>
+      {!loading && !account?.employees.length && <p>No employees have been added.</p>}
     </section>
   </Shell>;
 }

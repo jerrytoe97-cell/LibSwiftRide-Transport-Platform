@@ -363,12 +363,15 @@ api.post("/rides/:id/transitions", authenticate, authorize("PASSENGER", "DRIVER"
   if (driverAction && ride.driver?.userId !== req.user!.sub && req.user!.role !== "ADMIN") return res.status(403).json({ error: { code: "DRIVER_REQUIRED", message: "Only the assigned driver can perform this transition" } });
   if (status === "PASSENGER_BOARDED" && ride.passengerId !== req.user!.sub && req.user!.role !== "ADMIN") return res.status(403).json({ error: { code: "PASSENGER_REQUIRED", message: "Only the passenger can confirm boarding" } });
   if (status === "COMPLETED" && ride.paymentMethod !== "CASH" && ride.payment?.status !== "CAPTURED") return res.status(409).json({ error: { code: "PAYMENT_NOT_CONFIRMED", message: "Electronic payment must be confirmed before completion" } });
-  const finalPricing = status === "COMPLETED" ? calculateFare({
-    distanceM: ride.estimatedDistanceM, durationSec: ride.estimatedDurationSec,
-    demandMultiplier: ride.dynamicMultiplierBps / 10_000,
-    waitingTimeSec: input.waitingTimeSec ?? ride.waitingTimeSec, tollMinor: input.tollMinor ?? ride.tollMinor,
-    ...(ride.promoCode ? { promo: ride.promoCode } : {})
-  }) : null;
+  const finalPricing = status === "COMPLETED" ? (() => {
+    const { subtotalMinor: _subtotalMinor, ...persistedPricing } = calculateFare({
+      distanceM: ride.estimatedDistanceM, durationSec: ride.estimatedDurationSec,
+      demandMultiplier: ride.dynamicMultiplierBps / 10_000,
+      waitingTimeSec: input.waitingTimeSec ?? ride.waitingTimeSec, tollMinor: input.tollMinor ?? ride.tollMinor,
+      ...(ride.promoCode ? { promo: ride.promoCode } : {})
+    });
+    return persistedPricing;
+  })() : null;
   if (status === "COMPLETED" && ride.paymentMethod !== "CASH" && ride.payment?.amountMinor !== finalPricing!.fareMinor) {
     return res.status(409).json({ error: { code: "PAYMENT_AMOUNT_MISMATCH", message: "Confirm the adjusted fare before completing the ride" } });
   }
@@ -579,6 +582,29 @@ api.post("/payments/:id/confirm-cash", authenticate, authorize("DRIVER", "ADMIN"
   if (req.user!.role === "DRIVER" && payment.ride.driver?.userId !== req.user!.sub) return res.status(403).json({ error: { code: "FORBIDDEN", message: "Payment confirmation denied" } });
   const confirmed = await prisma.payment.update({ where: { id: payment.id }, data: { status: "CAPTURED", capturedAt: new Date() } });
   await writeAudit({ actorId: req.user!.sub, action: "CASH_PAYMENT_CONFIRMED", entityType: "Payment", entityId: payment.id, ipAddress: req.ip });
+  res.json({ data: confirmed });
+}));
+
+api.post("/payments/:id/confirm-mobile-money", authenticate, authorize("ADMIN", "SUPPORT"), asyncRoute(async (req, res) => {
+  const input = z.object({
+    providerReference: z.string().trim().min(6).max(120),
+    evidenceReference: z.string().trim().min(6).max(240)
+  }).parse(req.body);
+  const idempotencyKey = z.string().min(8).parse(req.header("idempotency-key"));
+  const payment = await prisma.payment.findUnique({ where: { id: req.params.id } });
+  if (!payment || !["ORANGE_MONEY", "MTN_MOMO"].includes(payment.method)) return res.status(404).json({ error: { code: "MOBILE_MONEY_PAYMENT_NOT_FOUND", message: "Mobile Money payment not found" } });
+  const priorConfirmation = await prisma.manualPaymentConfirmation.findUnique({ where: { idempotencyKey } });
+  if (priorConfirmation) {
+    if (priorConfirmation.paymentId !== payment.id) return res.status(409).json({ error: { code: "IDEMPOTENCY_KEY_REUSED", message: "Idempotency key belongs to another payment" } });
+    return res.json({ data: payment });
+  }
+  if (!["PENDING", "AUTHORIZED"].includes(payment.status)) return res.status(409).json({ error: { code: "PAYMENT_NOT_CONFIRMABLE", message: "Payment is not awaiting confirmation" } });
+  const confirmed = await prisma.$transaction(async (tx) => {
+    await tx.manualPaymentConfirmation.create({ data: { paymentId: payment.id, idempotencyKey, providerReference: input.providerReference, evidenceReference: input.evidenceReference, confirmedById: req.user!.sub } });
+    const updated = await tx.payment.update({ where: { id: payment.id, status: payment.status }, data: { status: "CAPTURED", providerRef: input.providerReference, capturedAt: new Date() } });
+    await tx.auditLog.create({ data: { actorId: req.user!.sub, action: "MOBILE_MONEY_PAYMENT_CONFIRMED", entityType: "Payment", entityId: payment.id, ipAddress: req.ip, metadata: { idempotencyKey, method: payment.method, evidenceRecorded: true } } });
+    return updated;
+  });
   res.json({ data: confirmed });
 }));
 

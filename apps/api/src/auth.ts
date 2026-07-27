@@ -56,19 +56,31 @@ export async function revokeRefreshToken(token: string) {
   await prisma.refreshToken.updateMany({ where: { tokenHash: digest(token), revokedAt: null }, data: { revokedAt: new Date() } });
 }
 
-export async function authenticate(req: Request, res: Response, next: NextFunction) {
+type SecurityMiddleware = ((req: Request, res: Response, next: NextFunction) => unknown) & {
+  securityControl: "authenticate" | "authorize";
+  roles?: readonly string[];
+};
+
+const authenticateHandler = async (req: Request, res: Response, next: NextFunction) => {
   const token = req.headers.authorization?.replace(/^Bearer /, "");
   if (!token) return res.status(401).json({ error: { code: "UNAUTHENTICATED", message: "Bearer token required" } });
   try {
-    req.user = await verifyAccessToken(token);
+    const claims = await verifyAccessToken(token);
+    const user = await prisma.user.findUnique({ where: { id: claims.sub }, select: { id: true, role: true, status: true } });
+    if (!user || user.status !== "ACTIVE") return res.status(401).json({ error: { code: "ACCOUNT_INACTIVE", message: "Account is unavailable" } });
+    req.user = { sub: user.id, role: user.role };
     next();
   } catch {
     res.status(401).json({ error: { code: "INVALID_TOKEN", message: "Token is invalid or expired" } });
   }
-}
+};
 
-export const authorize = (...roles: string[]) =>
-  (req: Request, res: Response, next: NextFunction) =>
+export const authenticate = Object.assign(authenticateHandler, { securityControl: "authenticate" as const }) as SecurityMiddleware;
+
+export const authorize = (...roles: string[]) => {
+  const handler = (req: Request, res: Response, next: NextFunction) =>
     req.user && roles.includes(req.user.role)
       ? next()
       : res.status(403).json({ error: { code: "FORBIDDEN", message: "Insufficient permission" } });
+  return Object.assign(handler, { securityControl: "authorize" as const, roles: [...roles] }) as SecurityMiddleware;
+};

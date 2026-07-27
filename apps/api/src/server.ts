@@ -37,6 +37,8 @@ app.use((req, res, next) => {
 });
 app.use("/api", rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api/v1/auth", rateLimit({ windowMs: 15 * 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/auth/login", rateLimit({ windowMs: 15 * 60_000, limit: 10, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/auth/email-verification", rateLimit({ windowMs: 15 * 60_000, limit: 6, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api/v1/auth/password-reset", rateLimit({ windowMs: 60 * 60_000, limit: 8, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api/v1/rides", rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api/v1/payments", rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
@@ -44,6 +46,7 @@ app.use("/api/v1/deliveries", rateLimit({ windowMs: 60_000, limit: 30, standardH
 app.use("/api/v1/corporate", rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api/v1/admin", rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api/v1/reports", rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/devices", rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api", (_req, res, next) => {
   res.setHeader("cache-control", "no-store");
   next();
@@ -55,7 +58,10 @@ app.use(express.json({
 app.get("/health/live", (_req, res) => res.json({ status: "ok" }));
 app.get("/health/ready", async (_req, res) => {
   try {
-    await Promise.all([prisma.$queryRaw`SELECT 1`, redis.ping()]);
+    await Promise.race([
+      Promise.all([prisma.$queryRaw`SELECT 1`, redis.ping()]),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Dependency health check timed out")), 2_000))
+    ]);
     res.json({ status: "ready", dependencies: { postgres: "ok", redis: "ok" } });
   } catch { res.status(503).json({ status: "not_ready" }); }
 });

@@ -2,7 +2,7 @@
 
 LibSwiftRide is an enterprise ride-hailing platform designed for Liberia. This repository is a production-oriented monorepo containing the public website, passenger and driver experiences, fleet operations, administration, and a secure backend API.
 
-> Status: active foundation on the `development` branch. No production credentials belong in this repository.
+> Status: Phase 6 pre-deployment hardening on `phase-2-development`. No production credentials belong in this repository, and live payment APIs remain disabled.
 
 ## Products
 
@@ -81,6 +81,8 @@ Liberia defaults use `Africa/Monrovia`, `LRD`, and an initial Monrovia service a
 ## Delivery and governance
 
 CI validates types, tests, builds, dependency integrity and container builds. The deployment workflow calls a protected Render deploy hook and refuses to run when that environment secret is absent.
+
+The API acceptance suite exercises registration, email verification, driver KYC approval, dispatch, the complete ride lifecycle, SOS, fare settlement, cancellation/refund replay protection, manual Mobile Money confirmation, corporate/fleet ownership and privileged operations against PostgreSQL and Redis. See [Acceptance test report](ACCEPTANCE_TEST_REPORT.md).
 
 Changes should enter through feature branches and pull requests. Read [AGENTS.md](AGENTS.md) before automated work. Do not commit secrets, raw identity documents, payment card data, or unrestricted location histories.
 

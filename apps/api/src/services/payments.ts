@@ -1,6 +1,7 @@
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import type { PaymentMethod } from "@prisma/client";
 import { config } from "../config.js";
+import { resilientFetch } from "./http-client.js";
 
 export type PaymentRequest = {
   amountMinor: number;
@@ -44,10 +45,12 @@ class HookPaymentProvider implements PaymentProvider {
       if (config.NODE_ENV === "production") throw new Error(`${this.method} credentials are not configured`);
       return { providerRef: `${this.method.toLowerCase()}_${randomUUID()}`, status: "PENDING" as const };
     }
-    const response = await fetch(this.url, {
+    const response = await resilientFetch(this.url, {
       method: "POST",
       headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json", "idempotency-key": request.idempotencyKey },
-      body: JSON.stringify({ ...request, method: this.method })
+      body: JSON.stringify({ ...request, method: this.method }),
+      timeoutMs: 8_000,
+      attempts: 2
     });
     if (!response.ok) throw new Error(`${this.method} provider rejected the payment request`);
     const result = await response.json() as PaymentResult;
@@ -56,9 +59,11 @@ class HookPaymentProvider implements PaymentProvider {
   }
   async refund(providerRef: string, amountMinor: number) {
     if (!this.url || !this.token) throw new Error(`${this.method} refund provider is not configured`);
-    const response = await fetch(`${this.url}/${encodeURIComponent(providerRef)}/refunds`, {
+    const response = await resilientFetch(`${this.url}/${encodeURIComponent(providerRef)}/refunds`, {
       method: "POST", headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
-      body: JSON.stringify({ amountMinor })
+      body: JSON.stringify({ amountMinor }),
+      timeoutMs: 8_000,
+      attempts: 2
     });
     if (!response.ok) throw new Error(`${this.method} refund failed`);
   }
