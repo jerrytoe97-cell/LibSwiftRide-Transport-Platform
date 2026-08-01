@@ -17,6 +17,10 @@ export async function updateDriverLocation(userId: string, latitude: number, lon
 export async function matchDriver(rideId: string) {
   const ride = await prisma.ride.findUnique({ where: { id: rideId } });
   if (!ride || ride.status !== "SEARCHING") return null;
+  const rejectedDriverIds = new Set((await prisma.rideOffer.findMany({
+    where: { rideId, status: "REJECTED" },
+    select: { driverId: true }
+  })).map((offer) => offer.driverId));
   const candidates = await redis.geosearch(
     "drivers:geo",
     "FROMLONLAT",
@@ -30,6 +34,7 @@ export async function matchDriver(rideId: string) {
     20
   ) as string[];
   for (const driverId of candidates) {
+    if (rejectedDriverIds.has(driverId)) continue;
     const online = await redis.exists(`driver:location:${driverId}`);
     if (!online) {
       await redis.zrem("drivers:geo", driverId);
@@ -43,6 +48,11 @@ export async function matchDriver(rideId: string) {
         await tx.driver.update({ where: { id: driverId }, data: { status: "AVAILABLE" } });
         return null;
       }
+      await tx.rideOffer.upsert({
+        where: { rideId_driverId: { rideId, driverId } },
+        update: { status: "OFFERED", offeredAt: new Date(), respondedAt: null },
+        create: { rideId, driverId }
+      });
       await tx.rideEvent.create({ data: { rideId, type: "DRIVER_ASSIGNED", metadata: { driverId } } });
       return tx.ride.findUnique({ where: { id: rideId }, include: { driver: { include: { user: true, vehicle: true } } } });
     });

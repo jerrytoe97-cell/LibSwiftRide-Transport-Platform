@@ -5,7 +5,7 @@ Phase 4 remains on `phase-2-development`. It does not authorize deployment, Rend
 ## Delivered
 
 - Existing scheduled rides, driver availability, online/offline controls, favourite places, promotion management, trip history and earnings dashboards remain server-authoritative and receive the Phase 4 client improvements.
-- Referral codes are generated server-side. A referral qualifies exactly once after the referred passenger's first completed trip, and the reward is posted through the wallet ledger with an idempotent reference.
+- Referral codes are generated server-side. A referral qualifies exactly once after the referred passenger's first completed trip, earns 2% of that trip's final fare from the platform commission, and is posted through the wallet ledger with an idempotent reference.
 - Assigned passengers and drivers can exchange ride-scoped WebSocket messages. Messages are length- and rate-limited, persisted for participant-only history, and unavailable before assignment or after a trip ends.
 - Driver KYC documents expiring within 30 days generate one in-app and sandbox-push reminder. An indexed six-hour worker claims reminders transactionally.
 - Admins can send audited in-app and sandbox-push broadcasts to one role or an explicit bounded user set.

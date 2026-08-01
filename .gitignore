@@ -80,6 +80,8 @@ Thumbs.db
 test-results/
 playwright-report/
 apps/api/prisma/dev.db
+.codex-corepack/
+.preview-runtime/
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache

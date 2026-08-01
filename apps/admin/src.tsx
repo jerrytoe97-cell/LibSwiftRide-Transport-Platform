@@ -67,6 +67,7 @@ function App() {
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (!apiClient.hasSession()) return;
     const to = new Date();
     const from = new Date(to.getTime() - 30 * 86_400_000);
     Promise.all([
@@ -128,19 +129,58 @@ function App() {
           <table><tbody>
             <tr><th>Completed rides</th><td>{data.completedRides}</td></tr>
             <tr><th>Average rating</th><td>{data.averageRating?.toFixed(2) ?? "—"}</td></tr>
-            <tr><th>Platform commission</th><td>12%</td></tr>
-            <tr><th>Driver allocation</th><td>88%</td></tr>
+            <tr><th>Platform commission</th><td>14%</td></tr>
+            <tr><th>Driver allocation</th><td>86%</td></tr>
           </tbody></table>
           <p>Privileged changes write append-only audit records.</p>
         </div>
+      </section>
+      <section className="panel">
+        <div className="toolbar"><div><span className="eyebrow">Ride command centre</span><h2>Live ride monitoring</h2></div><button className="action secondary">Open operations view</button></div>
+        <table><thead><tr><th>Ride</th><th>Route</th><th>Driver</th><th>Passenger</th><th>Status</th><th>Fare</th></tr></thead><tbody>
+          {[["LSR-1048","ELWA → Broad Street","Samuel Toe","Miatta Kamara","In progress","LRD 950"],["LSR-1049","Sinkor → SKD","Abraham Kromah","Fatu Sheriff","Driver arriving","LRD 1,180"],["LSR-1050","Duala → Mamba Point","James Kpadeh","Comfort Dolo","Assigned","LRD 820"]].map((row)=><tr key={row[0]}>{row.map((cell)=><td key={cell}>{cell}</td>)}</tr>)}
+        </tbody></table>
+      </section>
+      <section className="grid four">
+        <Stat label="Registered passengers" value={String(passengers.length || 25)} detail="Demo accounts" trend="+8% this month" />
+        <Stat label="Driver earnings" value={money(report?.driverEarningsMinor ?? 0)} detail="86% protected share" />
+        <Stat label="Platform revenue" value={money(report?.platformCommissionMinor ?? 0)} detail="14% commission" />
+        <Stat label="Open incidents" value={String(analytics?.safetyIncidents ?? 0)} detail="Safety queue" />
+      </section>
+      <section className="split">
+        <article className="panel"><span className="eyebrow">Payment verification</span><h2>Manual Mobile Money</h2>
+          <div className="mini-row"><span>MTN MoMo · MM-DEMO-1004</span><strong>Pending review</strong></div>
+          <div className="mini-row"><span>Orange Money · MM-DEMO-1007</span><strong>Confirmed</strong></div>
+          <div className="mini-row"><span>Cash · LSR-1048</span><strong>Driver confirmed</strong></div>
+          <button className="action secondary">Open payment queue</button>
+        </article>
+        <article className="panel"><span className="eyebrow">Approvals</span><h2>Financial operations</h2>
+          <div className="mini-row"><span>Refund requests</span><strong>3 awaiting review</strong></div>
+          <div className="mini-row"><span>Driver payouts</span><strong>7 ready</strong></div>
+          <div className="mini-row"><span>Payment exceptions</span><strong>1 flagged</strong></div>
+          <button className="action secondary">Review approvals</button>
+        </article>
+      </section>
+      <section className="split">
+        <article className="panel"><span className="eyebrow">Safety and support</span><h2>Priority cases</h2>
+          <div className="mini-row"><span>Safety check · LSR-1041</span><strong>Open</strong></div>
+          <div className="mini-row"><span>Lost item · LSR-1032</span><strong>Acknowledged</strong></div>
+          <div className="mini-row"><span>Fare complaint · LSR-1028</span><strong>Support review</strong></div>
+        </article>
+        <article className="panel"><span className="eyebrow">System status</span><h2>Configuration health</h2>
+          <div className="mini-row"><span>Payments</span><strong>Disabled · sandbox safe</strong></div>
+          <div className="mini-row"><span>Notifications</span><strong>Sandbox provider</strong></div>
+          <div className="mini-row"><span>Database / Redis</span><strong>Healthy</strong></div>
+          <div className="mini-row"><span>Demo mode</span><strong>Local only</strong></div>
+        </article>
       </section>
       <section className="panel">
         <span className="eyebrow">30-day report</span>
         <h2>Ride and revenue performance</h2>
         <div className="grid">
           <Stat label="Completion rate" value={`${Math.round((report?.completionRate ?? 0) * 100)}%`} detail={`${report?.completedRides ?? 0} of ${report?.rides ?? 0} rides`} />
-          <Stat label="Driver earnings" value={money(report?.driverEarningsMinor ?? 0)} detail="88% allocation" />
-          <Stat label="Platform commission" value={money(report?.platformCommissionMinor ?? 0)} detail="12% allocation" />
+          <Stat label="Driver earnings" value={money(report?.driverEarningsMinor ?? 0)} detail="86% allocation" />
+          <Stat label="Platform commission" value={money(report?.platformCommissionMinor ?? 0)} detail="14% allocation" />
         </div>
       </section>
       <section className="panel">
@@ -169,7 +209,7 @@ function App() {
         <span className="eyebrow">Financial controls</span>
         <h2>Commission configuration</h2>
         <p>The production split is locked by API validation and database constraints. Changes require a reviewed release, not a dashboard override.</p>
-        <table><tbody><tr><th>Driver share</th><td>{(commission?.enforced.driverShareBps ?? 8800) / 100}%</td></tr><tr><th>Company commission</th><td>{(commission?.enforced.companyCommissionBps ?? 1200) / 100}%</td></tr><tr><th>Editable at runtime</th><td>No</td></tr></tbody></table>
+        <table><tbody><tr><th>Driver share</th><td>{(commission?.enforced.driverShareBps ?? 8600) / 100}%</td></tr><tr><th>Company commission</th><td>{(commission?.enforced.companyCommissionBps ?? 1400) / 100}%</td></tr><tr><th>Editable at runtime</th><td>No</td></tr></tbody></table>
       </section>
       <section className="panel">
         <span className="eyebrow">Fraud operations</span><h2>Signals awaiting review</h2>

@@ -4,10 +4,15 @@ import { apiClient, money } from "@libswiftride/sdk";
 import { Action, Map, Shell, Stat } from "@libswiftride/ui";
 import "@libswiftride/ui/styles.css";
 
-type ActiveRide = { id: string; status: string; pickupAddress: string; destinationAddress: string; fareMinor: number };
+type ActiveRide = {
+  id: string; status: string; pickupAddress: string; pickupLatitude: number; pickupLongitude: number;
+  destinationAddress: string; destinationLatitude: number; destinationLongitude: number;
+  fareMinor: number; driverEarningsMinor: number; estimatedDistanceM: number; estimatedDurationSec: number; paymentMethod: string;
+  passenger: { firstName: string; lastName: string; phone: string };
+};
 type Dashboard = {
-  driver: { status: string; verifiedAt: string | null; kycStatus: string | null; vehicle: { plateNumber: string } | null };
-  earnings: { driverEarningsMinor: number; completedRides: number; currency: string };
+  driver: { firstName: string; lastName: string; status: string; verifiedAt: string | null; kycStatus: string | null; vehicle: { plateNumber: string } | null };
+  earnings: { driverEarningsMinor: number; completedRides: number; currency: string; today: { driverEarningsMinor: number; completedRides: number }; lastSevenDays: { driverEarningsMinor: number; completedRides: number } };
   wallet: { balanceMinor: number; currency: string };
   performance: { completedRides: number; cancelledRides: number; completionRate: number };
   rating: { average: number | null; count: number };
@@ -18,6 +23,8 @@ type AvailabilityWindow = { id: string; startsAt: string; endsAt: string };
 type RideHistory = { id: string; status: string; pickupAddress: string; destinationAddress: string; driverEarningsMinor: number; completedAt: string | null };
 type ChatMessage = { id: string; senderId: string; content: string; createdAt: string };
 type Incentive = { id: string; name: string; minimumRides: number; bonusMinor: number; completedRides: number; awarded: boolean; endsAt: string };
+type Onboarding = { id: string; onboardingStep: string; verifiedAt: string | null; status: string; kycCase: { status: string; rejectionCode: string | null; rejectionNotes: string | null; documents: Array<{ type: string }> } | null; vehicle: { make: string; model: string; plateNumber: string; active: boolean } | null };
+type PhotoPreview = { name: string; url: string };
 
 const nextStatus: Record<string, string> = {
   DRIVER_ASSIGNED: "DRIVER_ARRIVING",
@@ -37,11 +44,39 @@ function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [incentives, setIncentives] = useState<Incentive[]>([]);
+  const [onboarding, setOnboarding] = useState<Onboarding | null | undefined>(undefined);
+  const [licenseNumber, setLicenseNumber] = useState("");
+  const [nationalIdRef, setNationalIdRef] = useState("");
+  const [offerSeconds, setOfferSeconds] = useState(60);
+  const [profilePhoto, setProfilePhoto] = useState<PhotoPreview | null>(null);
+  const [vehiclePhoto, setVehiclePhoto] = useState<PhotoPreview | null>(null);
   const socket = useRef<WebSocket | null>(null);
   const watchId = useRef<number | null>(null);
 
+  function selectPhoto(file: File | undefined, current: PhotoPreview | null, update: (photo: PhotoPreview | null) => void) {
+    if (!file) return;
+    if (!['image/jpeg', 'image/png'].includes(file.type)) {
+      setMessage("Choose a JPEG or PNG photo.");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setMessage("Photo must be 5 MB or smaller.");
+      return;
+    }
+    if (current) URL.revokeObjectURL(current.url);
+    update({ name: file.name, url: URL.createObjectURL(file) });
+    setMessage("Photo preview is ready on this device. It has not been uploaded.");
+  }
+
   async function load() {
     if (!apiClient.hasSession()) return;
+    const onboardingResponse = await apiClient.request<{ data: Onboarding | null }>("/drivers/me/onboarding");
+    setOnboarding(onboardingResponse.data);
+    if (!onboardingResponse.data) {
+      setDashboard(null);
+      setMessage("Complete your driver profile to begin verification.");
+      return;
+    }
     const [response, windows, rides, incentivePrograms] = await Promise.all([
       apiClient.request<{ data: Dashboard }>("/drivers/me/dashboard"),
       apiClient.request<{ data: AvailabilityWindow[] }>("/drivers/me/availability-schedule"),
@@ -55,6 +90,15 @@ function App() {
       if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify({ type: "ride.subscribe", rideId: response.data.activeRide.id }));
     }
     setMessage("");
+  }
+
+  async function startOnboarding() {
+    try {
+      await apiClient.request("/drivers/onboarding", { method: "POST", body: JSON.stringify({ licenseNumber, nationalIdRef }) });
+      setLicenseNumber("");
+      setNationalIdRef("");
+      await load();
+    } catch (error) { setMessage((error as Error).message); }
   }
 
   async function addAvailability() {
@@ -71,6 +115,23 @@ function App() {
       if (watchId.current != null) navigator.geolocation.clearWatch(watchId.current);
     };
   }, []);
+
+  useEffect(() => () => { if (profilePhoto) URL.revokeObjectURL(profilePhoto.url); }, [profilePhoto?.url]);
+  useEffect(() => () => { if (vehiclePhoto) URL.revokeObjectURL(vehiclePhoto.url); }, [vehiclePhoto?.url]);
+
+  useEffect(() => {
+    if (dashboard?.activeRide?.status !== "DRIVER_ASSIGNED") {
+      setOfferSeconds(60);
+      return;
+    }
+    const timer = window.setInterval(() => setOfferSeconds((seconds) => Math.max(0, seconds - 1)), 1_000);
+    return () => window.clearInterval(timer);
+  }, [dashboard?.activeRide?.id, dashboard?.activeRide?.status]);
+
+  useEffect(() => {
+    if (offerSeconds !== 0 || dashboard?.activeRide?.status !== "DRIVER_ASSIGNED") return;
+    void respondToOffer("reject");
+  }, [offerSeconds]);
 
   async function setAvailability(status: "AVAILABLE" | "OFFLINE") {
     try {
@@ -116,6 +177,18 @@ function App() {
     }
   }
 
+  async function respondToOffer(decision: "accept" | "reject") {
+    if (!dashboard?.activeRide || dashboard.activeRide.status !== "DRIVER_ASSIGNED") return;
+    try {
+      await apiClient.request(`/drivers/rides/${dashboard.activeRide.id}/${decision}`, {
+        method: "POST",
+        ...(decision === "reject" ? { body: JSON.stringify({ reason: "UNAVAILABLE" }) } : {})
+      });
+      setMessage(decision === "accept" ? "Ride accepted. Navigate safely to the pickup." : "Ride declined. Finding another driver for the passenger.");
+      await load();
+    } catch (error) { setMessage((error as Error).message); }
+  }
+
   async function rideAction(status: "CANCELLED") {
     if (!dashboard?.activeRide) return;
     try {
@@ -140,15 +213,67 @@ function App() {
 
   const online = dashboard?.driver.status === "AVAILABLE";
   const activeNextStatus = dashboard?.activeRide ? nextStatus[dashboard.activeRide.status] : undefined;
+  const incomingRide = dashboard?.activeRide?.status === "DRIVER_ASSIGNED" ? dashboard.activeRide : null;
+  const navigationTarget = dashboard?.activeRide
+    ? ["PASSENGER_BOARDED", "IN_PROGRESS"].includes(dashboard.activeRide.status)
+      ? { latitude: dashboard.activeRide.destinationLatitude, longitude: dashboard.activeRide.destinationLongitude }
+      : { latitude: dashboard.activeRide.pickupLatitude, longitude: dashboard.activeRide.pickupLongitude }
+    : null;
+  const navigationUrl = navigationTarget
+    ? `https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=${coords.latitude}%2C${coords.longitude}%3B${navigationTarget.latitude}%2C${navigationTarget.longitude}`
+    : "";
   return (
     <Shell product="Driver" demoRole="DRIVER">
+      {onboarding === null && <section className="panel onboarding-panel">
+        <span className="eyebrow">Driver registration</span>
+        <h1>Build your driver profile.</h1>
+        <p>Enter the official references exactly as they appear on your documents. Verification files are handled separately through LibSwiftRide&apos;s restricted KYC process.</p>
+        <div className="form-row"><label>Driver licence number<input value={licenseNumber} minLength={4} required onChange={(event) => setLicenseNumber(event.target.value)} /></label><label>National ID reference<input value={nationalIdRef} minLength={4} required onChange={(event) => setNationalIdRef(event.target.value)} /></label></div>
+        <Action disabled={licenseNumber.length < 4 || nationalIdRef.length < 4} onClick={startOnboarding}>Continue to verification</Action>
+      </section>}
+      {onboarding && !onboarding.verifiedAt && <section className="panel verification-status">
+        <span className="eyebrow">Driver verification</span><h2>{onboarding.kycCase?.status === "SUBMITTED" ? "Documents under review" : "Verification required"}</h2>
+        <p>Status: <strong>{onboarding.kycCase?.status ?? "DRAFT"}</strong> · Step: {onboarding.onboardingStep}</p>
+        <div className="verification-checklist">
+          {([["DRIVER_LICENSE", "Driver license"], ["VEHICLE_REGISTRATION", "Vehicle registration"], ["INSURANCE", "Insurance document"], ["INSPECTION", "Vehicle photos / inspection"], ["PROFILE_PHOTO", "Profile photo"]] as const).map(([type, label]) => {
+            const complete = onboarding.kycCase?.documents.some((document) => document.type === type);
+            return <div key={type} className={complete ? "complete" : ""}><span>{complete ? "✓" : "○"}</span><strong>{label}</strong><small>{complete ? "Received" : "Required"}</small></div>;
+          })}
+          <div className={onboarding.kycCase?.status === "APPROVED" ? "complete" : ""}><span>{onboarding.kycCase?.status === "APPROVED" ? "✓" : "○"}</span><strong>Admin approval</strong><small>{onboarding.kycCase?.status === "SUBMITTED" ? "Under review" : "Pending"}</small></div>
+        </div>
+        {onboarding.kycCase?.rejectionNotes && <p className="notice error">{onboarding.kycCase.rejectionNotes}</p>}
+        <div className="photo-capture-grid">
+          <label className="photo-capture-card">
+            <strong>Driver profile photo</strong>
+            <span>Use a clear, front-facing photo without sunglasses or filters.</span>
+            {profilePhoto ? <img src={profilePhoto.url} alt="Selected driver profile preview" /> : <div className="photo-placeholder">Your face should be clearly visible</div>}
+            <input type="file" accept="image/jpeg,image/png" capture="user" onChange={(event) => selectPhoto(event.target.files?.[0], profilePhoto, setProfilePhoto)} />
+            {profilePhoto && <small>{profilePhoto.name} · local preview only</small>}
+          </label>
+          <label className="photo-capture-card">
+            <strong>Vehicle exterior photo</strong>
+            <span>Show the full vehicle, colour, condition, and licence plate.</span>
+            {vehiclePhoto ? <img src={vehiclePhoto.url} alt="Selected vehicle preview" /> : <div className="photo-placeholder">Photograph the vehicle in good lighting</div>}
+            <input type="file" accept="image/jpeg,image/png" capture="environment" onChange={(event) => selectPhoto(event.target.files?.[0], vehiclePhoto, setVehiclePhoto)} />
+            {vehiclePhoto && <small>{vehiclePhoto.name} · local preview only</small>}
+          </label>
+        </div>
+        <p className="notice">Secure document upload remains unavailable until private KYC storage and malware scanning are configured. Do not send identity documents through email or chat.</p>
+      </section>}
+      <div hidden={onboarding === null}>
+      {incomingRide && <section className="incoming-ride" aria-live="assertive">
+        <div><span className="eyebrow">Incoming ride request · {offerSeconds}s</span><h1>{incomingRide.passenger.firstName} needs a ride</h1><p>{incomingRide.pickupAddress} → {incomingRide.destinationAddress}</p></div>
+        <div className="offer-metrics"><span><small>Estimated time</small><strong>{Math.max(1, Math.round(incomingRide.estimatedDurationSec / 60))} min</strong></span><span><small>Trip distance</small><strong>{(incomingRide.estimatedDistanceM / 1000).toFixed(1)} km</strong></span><span><small>Your earnings</small><strong>{money(incomingRide.driverEarningsMinor)}</strong></span><span><small>Payment</small><strong>{incomingRide.paymentMethod.replaceAll("_", " ")}</strong></span></div>
+        <div className="offer-actions"><Action onClick={() => respondToOffer("accept")}>Accept ride</Action><button className="reject-offer" onClick={() => respondToOffer("reject")}>Decline</button></div>
+      </section>}
       <div className="toolbar">
-        <div><span className="eyebrow">Driver home</span><h1>Earn on your schedule.</h1></div>
-        <Action onClick={() => setAvailability(online ? "OFFLINE" : "AVAILABLE")}>{online ? "Go offline" : "Go online"}</Action>
+        <div><span className="eyebrow">Driver dashboard</span><h1>Welcome{dashboard?.driver.firstName ? `, ${dashboard.driver.firstName}` : ""}.</h1><p>Current location: Monrovia</p></div>
+        <Action className={online ? "availability-online" : ""} disabled={dashboard?.driver.status === "ON_TRIP"} onClick={() => setAvailability(online ? "OFFLINE" : "AVAILABLE")}>{dashboard?.driver.status === "ON_TRIP" ? "Trip active" : online ? "● Online — go offline" : "Go online"}</Action>
       </div>
       {message && <p className="notice">{message}</p>}
       <div className="grid">
-        <Stat label="Lifetime earnings" value={money(dashboard?.earnings.driverEarningsMinor ?? 0)} detail={`${dashboard?.earnings.completedRides ?? 0} completed rides`} />
+        <Stat label="Today" value={money(dashboard?.earnings.today.driverEarningsMinor ?? 0)} detail={`${dashboard?.earnings.today.completedRides ?? 0} completed rides`} />
+        <Stat label="Last 7 days" value={money(dashboard?.earnings.lastSevenDays.driverEarningsMinor ?? 0)} detail={`${dashboard?.earnings.lastSevenDays.completedRides ?? 0} completed rides`} />
         <Stat label="Wallet balance" value={money(dashboard?.wallet.balanceMinor ?? 0)} detail="Available ledger balance" />
         <Stat label="Rating" value={dashboard?.rating.average?.toFixed(2) ?? "—"} detail={`${dashboard?.rating.count ?? 0} reviews`} />
       </div>
@@ -156,12 +281,14 @@ function App() {
         <Map {...coords} label="Driver location" />
         <div className="panel">
           <span className="eyebrow">Current assignment</span>
-          {dashboard?.activeRide ? <>
+          {dashboard?.activeRide && !incomingRide ? <>
             <h2>{dashboard.activeRide.status.replaceAll("_", " ")}</h2>
             <p>{dashboard.activeRide.pickupAddress} → {dashboard.activeRide.destinationAddress}</p>
             <p><strong>{money(dashboard.activeRide.fareMinor)}</strong></p>
             {activeNextStatus && <Action onClick={advanceRide}>Mark {activeNextStatus.replaceAll("_", " ").toLowerCase()}</Action>}
             {dashboard.activeRide.status === "DRIVER_ARRIVED" && <p>Waiting for the passenger to confirm boarding.</p>}
+            {navigationUrl && <a className="action navigation-link" href={navigationUrl} target="_blank" rel="noreferrer">Open turn-by-turn navigation</a>}
+            <a className="action contact-link" href={`tel:${dashboard.activeRide.passenger.phone}`}>Call passenger</a>
             <div className="toolbar"><button onClick={sos}>SOS</button><button className="link-button" onClick={() => rideAction("CANCELLED")}>Cancel ride</button></div>
           </> : <p>No active ride. Stay online to receive a match.</p>}
           <p>Verification: {dashboard?.driver.kycStatus ?? "not started"} · Vehicle: {dashboard?.driver.vehicle?.plateNumber ?? "not assigned"}</p>
@@ -187,6 +314,7 @@ function App() {
         {incentives.map((program) => <p key={program.id}><strong>{program.name}</strong> · {Math.min(program.completedRides, program.minimumRides)}/{program.minimumRides} rides · {money(program.bonusMinor)} bonus · {program.awarded ? "Awarded" : `ends ${new Date(program.endsAt).toLocaleDateString("en-LR")}`}</p>)}
         {!incentives.length && <p>No active incentive programs.</p>}
       </section>
+      </div>
     </Shell>
   );
 }

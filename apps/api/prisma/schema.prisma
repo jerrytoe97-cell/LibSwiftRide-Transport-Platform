@@ -43,6 +43,13 @@ enum RideStatus {
   CANCELLED
 }
 
+enum RideOfferStatus {
+  OFFERED
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
 enum PaymentStatus {
   PENDING
   AUTHORIZED
@@ -249,6 +256,7 @@ model Driver {
   payouts             DriverPayout[]
   incentives          DriverIncentive[]
   deliveries          Delivery[]
+  rideOffers          RideOffer[]
 }
 
 model Vehicle {
@@ -322,6 +330,7 @@ model Ride {
   tripShares             TripShare[]
   refunds                Refund[]
   chatMessages           ChatMessage[]
+  offers                 RideOffer[]
 
   @@unique([passengerId, idempotencyKey])
   @@index([status, requestedAt])
@@ -330,6 +339,20 @@ model Ride {
   @@index([driverId, completedAt(sort: Desc)])
   @@index([status, scheduledFor])
   @@index([corporateEmployeeId, requestedAt(sort: Desc)])
+}
+
+model RideOffer {
+  id          String          @id @default(uuid())
+  rideId      String
+  ride        Ride            @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  driverId    String
+  driver      Driver          @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  status      RideOfferStatus @default(OFFERED)
+  offeredAt   DateTime        @default(now())
+  respondedAt DateTime?
+
+  @@unique([rideId, driverId])
+  @@index([driverId, status, offeredAt(sort: Desc)])
 }
 
 model RideEvent {

@@ -34,6 +34,7 @@ Implemented foundation endpoints:
 | PATCH | `/users/me/preferences` | Authenticated locale preference |
 | POST/DELETE | `/devices` | Authenticated push-device lifecycle |
 | POST | `/promos/validate` | Passenger promotion eligibility and bounded discount |
+| GET | `/promos/active` | Passenger-safe active promotion summaries; pricing remains server-authoritative |
 | GET | `/notifications?limit=&unreadOnly=` | Authenticated notification inbox and unread count |
 | GET | `/dispatch/drivers` | Dispatcher/admin eligible available drivers |
 | GET | `/payments/mobile-money/:method/display` | Passenger; intentionally returns only the selected payment number |
@@ -63,7 +64,7 @@ Implemented foundation endpoints:
 | POST/DELETE | `/fleet/drivers` | Fleet manager/admin; safe multi-driver assignment |
 | GET | `/drivers/me/incentives` | Driver incentive progress and awards |
 | POST | `/admin/incentives` | Admin; create bounded incentive programs |
-| GET/POST | `/admin/settings/commission` | Admin; locked 88/12 policy and audit snapshots |
+| GET/POST | `/admin/settings/commission` | Admin; locked 86/14 policy and audit snapshots |
 | GET/POST | `/geofence-zones`, `/admin/geofence-zones` | Operations/admin dynamic-pricing zones |
 | GET | `/dispatch/airport-pickups` | Dispatcher/admin arrival queue |
 | GET/POST | `/deliveries` | Role-scoped delivery list and passenger booking |
@@ -76,6 +77,8 @@ Implemented foundation endpoints:
 | GET | `/reports/advanced` | Admin corporate, delivery, campaign, risk and incentive analytics |
 
 WebSocket endpoint `/ws` accepts the access token through an `auth.<base64url-token>` WebSocket subprotocol, keeping credentials out of URLs and proxy access logs. Driver locations bind to the verified token subject, and ride subscriptions require participant or operations access. Production should use very short-lived socket tickets when the client platform supports them and Redis pub/sub across replicas.
+
+Web clients opt into push delivery by registering a standards-based Push API subscription with `POST /devices`. Ride lifecycle events queue separate in-app and push records. The API sends push subscriptions only to the configured authenticated delivery adapter; sandbox mode marks fictional notifications delivered without contacting external services.
 
 Subscribed ride participants may send `chat.send` events with `rideId` and `content`; the server emits persisted `chat.message` events. Messages are limited to 500 characters and one send per second per connection.
 

@@ -9,7 +9,7 @@ The initial repository contained only a generic Node `.gitignore` and a two-line
 - Five distinct React application workspaces and a shared responsive design layer.
 - Express/TypeScript REST API, PostgreSQL Prisma schema and Redis integration.
 - Authentication, authorization, ride quote/booking/read/complete paths, earnings and admin metrics.
-- Enforced 88% driver and 12% company fare allocation with unit tests.
+- Enforced 86% driver and 14% company fare allocation with unit tests, plus a one-time 2% first-ride referral reward funded from the company share.
 - Signed payment webhook entry point and sandbox/provider boundary.
 - Ephemeral GPS WebSocket ingestion.
 - Docker, Compose, CI checks, guarded deployment template and operational docs.

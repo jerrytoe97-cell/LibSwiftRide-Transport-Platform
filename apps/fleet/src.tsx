@@ -27,7 +27,10 @@ function App() {
     setLoading(false);
   }
 
-  useEffect(() => { load().catch((requestError: Error) => { setError(requestError.message); setLoading(false); }); }, []);
+  useEffect(() => {
+    if (!apiClient.hasSession()) { setLoading(false); return; }
+    load().catch((requestError: Error) => { setError(requestError.message); setLoading(false); });
+  }, []);
 
   async function assignDriver() {
     if (!fleets[0] || !driverId) return;
@@ -54,7 +57,7 @@ function App() {
     <div className="grid">
       <Stat label="Online drivers" value={String(drivers.filter((driver) => driver.status === "AVAILABLE").length)} detail={`${drivers.length} managed drivers`} />
       <Stat label="30-day earnings" value={money(report?.driverEarningsMinor ?? 0)} detail={`${report?.completedRides ?? 0} completed rides`} />
-      <Stat label="Platform commission" value={money(report?.platformCommissionMinor ?? 0)} detail="Enforced at 12%" />
+      <Stat label="Platform commission" value={money(report?.platformCommissionMinor ?? 0)} detail="Enforced at 14%" />
     </div>
     <section className="hero"><Map label="Fleet map" /><div className="panel">
       <h2>Add an existing driver</h2>
@@ -70,6 +73,26 @@ function App() {
     </section>
     <section className="panel"><h2>Vehicles</h2>
       <table><thead><tr><th>Vehicle</th><th>Plate</th><th>Status</th></tr></thead><tbody>{vehicles.map((vehicle) => <tr key={vehicle.id}><td>{vehicle.make} {vehicle.model}</td><td>{vehicle.plateNumber}</td><td>{vehicle.active ? "Active" : "Inactive"}</td></tr>)}</tbody></table>
+    </section>
+    <section className="split">
+      <article className="panel"><span className="eyebrow">Vehicle utilisation</span><h2>Fleet health</h2>
+        <div className="mini-row"><span>Average utilisation</span><strong>74%</strong></div><div className="progress"><span style={{width:"74%"}} /></div>
+        <div className="mini-row"><span>Vehicles in service</span><strong>{vehicles.filter((vehicle)=>vehicle.active).length}</strong></div>
+        <div className="mini-row"><span>Inspection due soon</span><strong>2</strong></div>
+      </article>
+      <article className="panel"><span className="eyebrow">Payout summary</span><h2>Driver settlements</h2>
+        <div className="mini-row"><span>Available for payout</span><strong>{money(286_400)}</strong></div>
+        <div className="mini-row"><span>Processing</span><strong>{money(125_000)}</strong></div>
+        <div className="mini-row"><span>Paid this month</span><strong>{money(report?.driverEarningsMinor ?? 0)}</strong></div>
+      </article>
+    </section>
+    <section className="panel"><span className="eyebrow">Maintenance and compliance</span><h2>Upcoming vehicle actions</h2>
+      <table><thead><tr><th>Vehicle</th><th>Action</th><th>Due</th><th>Priority</th></tr></thead><tbody>
+        {vehicles.slice(0,4).map((vehicle,index)=><tr key={vehicle.id}><td>{vehicle.make} {vehicle.model} · {vehicle.plateNumber}</td><td>{index%2 ? "Insurance renewal" : "Routine service"}</td><td>{new Date(Date.now()+(index+2)*86400000*7).toLocaleDateString("en-LR")}</td><td>{index<2 ? "Due soon" : "Scheduled"}</td></tr>)}
+      </tbody></table>
+    </section>
+    <section className="panel"><div className="toolbar"><div><span className="eyebrow">Reports</span><h2>Fleet performance</h2></div><button className="action secondary">Export monthly report</button></div>
+      <div className="grid"><Stat label="Completion rate" value="94%" detail="Last 30 days" /><Stat label="Average driver rating" value="4.8" detail="Across active drivers" /><Stat label="Earnings per vehicle" value={money(138_500)} detail="Monthly average" /></div>
     </section>
   </Shell>;
 }

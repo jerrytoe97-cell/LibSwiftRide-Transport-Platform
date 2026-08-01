@@ -9,6 +9,7 @@ const prisma = new PrismaClient();
 const passwordHash = await argon2.hash("LibSwiftRide-Demo-2026!");
 const now = new Date();
 const day = 86_400_000;
+const demoId = (group: number, index = 0) => `00000000-0000-4000-${String(8000+group).padStart(4,"0")}-${String(index).padStart(12,"0")}`;
 const names = [
   ["Miatta","Kamara"],["Samuel","Toe"],["Hawa","Johnson"],["Emmanuel","Kollie"],["Martha","Sackie"],
   ["Joseph","Tamba"],["Fatu","Sheriff"],["Abraham","Kromah"],["Comfort","Dolo"],["Prince","Wreh"],
@@ -102,7 +103,7 @@ for (let index = 0; index < 20; index++) {
   });
 }
 
-const campaign = await prisma.couponCampaign.upsert({ where: { id: "demo-campaign-2026" }, update: {}, create: { id: "demo-campaign-2026", name: "Move Monrovia", budgetMinor: 2_000_000, spentMinor: 236_000, startsAt: new Date(now.getTime()-15*day), endsAt: new Date(now.getTime()+60*day) } });
+const campaign = await prisma.couponCampaign.upsert({ where: { id: demoId(1) }, update: {}, create: { id: demoId(1), name: "Move Monrovia", budgetMinor: 2_000_000, spentMinor: 236_000, startsAt: new Date(now.getTime()-15*day), endsAt: new Date(now.getTime()+60*day) } });
 for (const [code,percent] of [["WELCOME25",25],["MONROVIA10",10],["BUSINESS15",15]] as const) {
   await prisma.promoCode.upsert({ where: { code }, update: { active: true }, create: { code, description: `${percent}% off demo rides`, percentageOff: percent, maxDiscountMinor: 30_000, startsAt: new Date(now.getTime()-10*day), expiresAt: new Date(now.getTime()+90*day), maxUses: 500, campaignId: campaign.id } });
 }
@@ -114,7 +115,8 @@ for (let index = 0; index < 48; index++) {
   const pickup = locations[index%locations.length];
   const destination = locations[(index+3)%locations.length];
   const fareMinor = 68_000+(index%8)*11_000;
-  const driverEarningsMinor = Math.floor(fareMinor*.88);
+  const companyCommissionMinor = Math.round(fareMinor * .14);
+  const driverEarningsMinor = fareMinor - companyCommissionMinor;
   const requestedAt = new Date(now.getTime()-(index%28)*day-(index%12)*3_600_000);
   const ride = await prisma.ride.upsert({
     where: { passengerId_idempotencyKey: { passengerId: passengers[index%passengers.length].id, idempotencyKey: `demo-ride-${String(index).padStart(3,"0")}` } },
@@ -124,7 +126,7 @@ for (let index = 0; index < 48; index++) {
       pickupAddress: pickup[0], pickupLatitude: pickup[1], pickupLongitude: pickup[2],
       destinationAddress: destination[0], destinationLatitude: destination[1], destinationLongitude: destination[2],
       estimatedDistanceM: 5_000+(index%9)*1_100, estimatedDurationSec: 900+(index%8)*240,
-      baseFareMinor: fareMinor, fareMinor, driverEarningsMinor, companyCommissionMinor: fareMinor-driverEarningsMinor,
+      baseFareMinor: fareMinor, fareMinor, driverEarningsMinor, companyCommissionMinor,
       currency: index%11===0 ? "USD" : "LRD", paymentMethod: index%4===0 ? "MTN_MOMO" : index%4===1 ? "ORANGE_MONEY" : "CASH",
       discountMinor: index%7===0 ? 8_000 : 0, idempotencyKey: `demo-ride-${String(index).padStart(3,"0")}`, requestedAt,
       scheduledFor: index%10===0 ? new Date(now.getTime()+(index%3+1)*day) : null,
@@ -153,20 +155,20 @@ for (let index = 0; index < 16; index++) {
   await prisma.rating.upsert({ where: { rideId_authorId: { rideId: rides[index].id, authorId: rides[index].passengerId } }, update: {}, create: { rideId: rides[index].id, authorId: rides[index].passengerId, subjectId: drivers[index%drivers.length].user.id, score: 4+index%2, comment: ["Safe and courteous trip.","Clean car and smooth ride.","Driver arrived on time."][index%3], status: index===15 ? "PENDING" : "PUBLISHED" } });
 }
 for (let index = 0; index < 5; index++) {
-  await prisma.safetyIncident.upsert({ where: { id: `demo-incident-${index}` }, update: {}, create: { id: `demo-incident-${index}`, rideId: rides[index+5].id, reporterId: rides[index+5].passengerId, status: index<2 ? "OPEN" : "RESOLVED", category: index%2 ? "LOST_ITEM" : "SAFETY_CHECK", note: "Fictional demonstration incident for operations review.", acknowledgedBy: index<2 ? null : primary.dispatcher.id, acknowledgedAt: index<2 ? null : now } });
+  await prisma.safetyIncident.upsert({ where: { id: demoId(2,index) }, update: {}, create: { id: demoId(2,index), rideId: rides[index+5].id, reporterId: rides[index+5].passengerId, status: index<2 ? "OPEN" : "RESOLVED", category: index%2 ? "LOST_ITEM" : "SAFETY_CHECK", note: "Fictional demonstration incident for operations review.", acknowledgedBy: index<2 ? null : primary.dispatcher.id, acknowledgedAt: index<2 ? null : now } });
 }
 for (let index = 0; index < 24; index++) {
   const userId = index%3===0 ? drivers[index%drivers.length].user.id : passengers[index%passengers.length].id;
-  await prisma.notification.upsert({ where: { id: `demo-notification-${index}` }, update: {}, create: { id: `demo-notification-${index}`, userId, channel: index%4===0 ? "PUSH" : "IN_APP", status: index%5===0 ? "READ" : "SENT", template: "demo-operations", title: ["Driver arriving","Ride receipt ready","Document expiry reminder","Promotion available"][index%4], body: "This is safe fictional content created for the local LibSwiftRide demonstration.", sentAt: now, readAt: index%5===0 ? now : null } });
+  await prisma.notification.upsert({ where: { id: demoId(3,index) }, update: {}, create: { id: demoId(3,index), userId, channel: index%4===0 ? "PUSH" : "IN_APP", status: index%5===0 ? "READ" : "SENT", template: "demo-operations", title: ["Driver arriving","Ride receipt ready","Document expiry reminder","Promotion available"][index%4], body: "This is safe fictional content created for the local LibSwiftRide demonstration.", sentAt: now, readAt: index%5===0 ? now : null } });
 }
 for (let index = 0; index < 6; index++) {
-  await prisma.chatMessage.upsert({ where: { id: `demo-chat-${index}` }, update: {}, create: { id: `demo-chat-${index}`, rideId: rides[8].id, senderId: index%2 ? drivers[8%drivers.length].user.id : rides[8].passengerId, content: index%2 ? "I am approaching the pickup point." : "Thank you. I am waiting by the main entrance.", createdAt: new Date(now.getTime()-(6-index)*60_000) } });
+  await prisma.chatMessage.upsert({ where: { id: demoId(4,index) }, update: {}, create: { id: demoId(4,index), rideId: rides[8].id, senderId: index%2 ? drivers[8%drivers.length].user.id : rides[8].passengerId, content: index%2 ? "I am approaching the pickup point." : "Thank you. I am waiting by the main entrance.", createdAt: new Date(now.getTime()-(6-index)*60_000) } });
 }
 await prisma.referral.upsert({ where: { referredUserId: passengers[1].id }, update: {}, create: { referrerId: primary.passenger.id, referredUserId: passengers[1].id, status: "REWARDED", rewardMinor: 20_000, qualifiedAt: new Date(now.getTime()-10*day), rewardedAt: new Date(now.getTime()-9*day) } });
 for (let index = 0; index < 8; index++) {
   await prisma.auditLog.create({ data: { actorId: index%2 ? primary.admin.id : primary.dispatcher.id, action: index%2 ? "PAYMENT_VERIFIED" : "SUPPORT_CASE_REVIEWED", entityType: index%2 ? "Payment" : "SupportCase", entityId: `DEMO-${index}`, metadata: { demo: true, category: index%2 ? "manual-mobile-money" : "service-complaint" } } });
 }
-await prisma.commissionPolicy.create({ data: { driverShareBps: 8800, companyCommissionBps: 1200, effectiveAt: now, createdById: primary.admin.id, reason: "Demo confirmation of enforced production split" } }).catch(() => undefined);
+await prisma.commissionPolicy.create({ data: { driverShareBps: 8600, companyCommissionBps: 1400, effectiveAt: now, createdById: primary.admin.id, reason: "Demo confirmation of enforced production split" } }).catch(() => undefined);
 
 console.log(JSON.stringify({ passengers:25, drivers:15, vehicles:8, fleets:3, businessAccounts:2, employees:20, rides:48, demoPassword:"LibSwiftRide-Demo-2026!", paymentsEnabled:false }));
 await prisma.$disconnect();

@@ -12,6 +12,8 @@ const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
+  ROUTING_API_URL: z.string().url().default("https://router.project-osrm.org"),
+  ROUTING_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(8_000),
   API_PORT: z.coerce.number().int().positive().default(4000),
   CORS_ORIGINS: z.string().min(1),
   JWT_ACCESS_SECRET: z.string().min(32),

@@ -24,6 +24,7 @@ function App() {
   }
 
   useEffect(() => {
+    if (!apiClient.hasSession()) return;
     let active = true;
     const refresh = () => load().catch((requestError: Error) => active && setError(requestError.message));
     refresh();
@@ -84,6 +85,17 @@ function App() {
           {drivers.map((driver) => <div className="toolbar" key={driver.id}><span>{driver.user.firstName} {driver.user.lastName} · {driver.location ? "GPS live" : "GPS stale"}</span><span><button className="link-button" onClick={() => setDriverStatus(driver.id, "OFFLINE")}>Set offline</button> · <button className="link-button" onClick={() => setDriverStatus(driver.id, "SUSPENDED")}>Suspend</button></span></div>)}
         </div>
       </section>
+      <section className="split">
+        <article className="panel"><span className="eyebrow">Ride timeline</span><h2>Selected trip progress</h2>
+          {["Booked · 10:42","Driver assigned · 10:43","Driver arriving · ETA 4 min","Pickup confirmation pending"].map((event,index)=><div className="mini-row" key={event}><span>{event}</span><strong>{index<3 ? "✓" : "Now"}</strong></div>)}
+        </article>
+        <article className="panel"><span className="eyebrow">Operations inbox</span><h2>Live notifications</h2>
+          <div className="mini-row"><span>2 rides approaching SLA</span><strong>Review</strong></div>
+          <div className="mini-row"><span>Driver document expires soon</span><strong>Notify</strong></div>
+          <div className="mini-row"><span>Open safety check</span><strong>Escalate</strong></div>
+        </article>
+      </section>
+      <section className="panel"><div className="toolbar"><div><span className="eyebrow">Incident response</span><h2>Contact and escalation actions</h2></div><div className="page-actions"><button className="action secondary">Contact driver</button><button className="action secondary">Contact passenger</button><button className="action danger">Escalate incident</button></div></div></section>
     </Shell>
   );
 }

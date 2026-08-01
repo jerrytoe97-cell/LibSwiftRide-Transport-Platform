@@ -6,7 +6,9 @@ services:
       POSTGRES_USER: libswiftride
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-libswiftride}
     ports: ["5432:5432"]
-    volumes: [postgres_data:/var/lib/postgresql/data]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/postgres/init-test-db.sql:/docker-entrypoint-initdb.d/10-init-test-db.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U libswiftride"]
       interval: 5s

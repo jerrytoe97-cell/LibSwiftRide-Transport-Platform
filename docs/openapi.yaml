@@ -28,6 +28,39 @@ components:
             message: { type: string }
             details: {}
 paths:
+  /users/me:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Read the authenticated user's profile, role and verification state
+      responses: { "200": { description: Current profile } }
+    patch:
+      security: [{ bearerAuth: [] }]
+      summary: Update the authenticated user's name, email or locale
+      responses:
+        "200": { description: Updated profile }
+        "422": { description: Invalid profile input }
+  /auth/sessions:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: List active refresh-token sessions for the current account
+      responses: { "200": { description: Active sessions } }
+  /auth/sessions/{id}:
+    delete:
+      security: [{ bearerAuth: [] }]
+      summary: Revoke one session owned by the current account
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204": { description: Session revoked }
+        "404": { description: Session not found or not owned by the account }
+  /drivers/me/onboarding:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Read the current driver's onboarding, verification and vehicle status
+      responses: { "200": { description: Driver onboarding state, or null before onboarding } }
   /corporate/account:
     get:
       security: [{ bearerAuth: [] }]
@@ -104,9 +137,23 @@ paths:
   /rides/quote:
     post:
       security: [{ bearerAuth: [] }]
-      summary: Calculate a server-authoritative fare estimate
+      summary: Calculate a routed, server-authoritative fare estimate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [pickup, destination]
+              properties:
+                pickup: { $ref: "#/components/schemas/Location" }
+                destination: { $ref: "#/components/schemas/Location" }
+                rideType: { type: string, enum: [ECONOMY], default: ECONOMY }
+                promoCode: { type: string }
       responses:
-        "200": { description: Fare quote }
+        "200": { description: Fare, distance, duration, ride type, and GeoJSON-order route coordinates }
+        "422": { description: Invalid locations or no driving route is available }
+        "503": { description: Routing provider network failure }
   /rides:
     get:
       security: [{ bearerAuth: [] }]

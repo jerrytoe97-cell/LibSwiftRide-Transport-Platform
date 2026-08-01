@@ -3,8 +3,20 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src.tsx", "./styles.css": "./styles.css" },
-  "peerDependencies": { "react": "^19.1.0" },
+  "exports": {
+    ".": "./src.tsx",
+    "./styles.css": "./styles.css",
+    "./theme": "./theme/index.ts",
+    "./theme.css": "./theme/theme.css"
+  },
+  "dependencies": {
+    "@libswiftride/sdk": "workspace:*",
+    "mapbox-gl": "^3.27.0",
+    "maplibre-gl": "^6.0.0"
+  },
+  "peerDependencies": {
+    "react": "^19.1.0"
+  },
   "scripts": {
     "build": "tsc --noEmit",
     "lint": "tsc --noEmit",

@@ -15,6 +15,7 @@ const routes = ((api as unknown as { stack: RouteLayer[] }).stack)
 const publicRoutes = new Set([
   "POST /auth/register",
   "POST /auth/login",
+  "POST /auth/demo-login",
   "POST /auth/refresh",
   "POST /auth/logout",
   "POST /auth/email-verification/confirm",
@@ -40,6 +41,8 @@ describe("API authorization contract", () => {
 
   it.each([
     ["POST", "/rides", ["PASSENGER"]],
+    ["POST", "/drivers/rides/:id/accept", ["DRIVER"]],
+    ["POST", "/drivers/rides/:id/reject", ["DRIVER"]],
     ["POST", "/drivers/kyc/submit", ["DRIVER"]],
     ["POST", "/dispatch/rides/:id/assign", ["DISPATCHER", "ADMIN"]],
     ["POST", "/payments/:id/confirm-mobile-money", ["ADMIN", "SUPPORT"]],

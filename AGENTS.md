@@ -10,7 +10,7 @@ Build and maintain LibSwiftRide as a safe, reliable ride-hailing platform for Li
 - Place deployable products in `apps/`, reusable code in `packages/`, infrastructure in `infra/`, and durable decisions in `docs/`.
 - Keep domain rules in the API; clients may display estimates but never authoritatively calculate fares, commissions, permissions, or state transitions.
 - Store money as integer minor units and timestamps in UTC. Present time in `Africa/Monrovia`.
-- Maintain the 88% driver / 12% company split through constants and tests.
+- Maintain the 86% driver / 14% company split through constants and tests. Fund the one-time 2% first-ride referral reward from the platform commission without reducing driver earnings.
 - Use UUIDs, explicit database constraints, idempotency keys for payments and bookings, and append-only audit events for privileged actions.
 - Never log passwords, tokens, payment details, government IDs, or precise location histories.
 

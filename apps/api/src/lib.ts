@@ -8,8 +8,8 @@ export const redis = new Redis(config.REDIS_URL, {
   maxRetriesPerRequest: 2
 });
 
-export const DRIVER_SHARE_BPS = 8_800;
-export const COMPANY_SHARE_BPS = 1_200;
+export const DRIVER_SHARE_BPS = 8_600;
+export const COMPANY_SHARE_BPS = 1_400;
 
 export function calculateSplit(fareMinor: number) {
   if (!Number.isSafeInteger(fareMinor) || fareMinor < 0) {

@@ -17,6 +17,6 @@ The API emits structured JSON through Pino. Every request receives an `x-request
 - KYC queue oldest age above the operating SLA
 - Backup failure or restore-test failure
 
-Dashboards should show ride requests, matching latency, completion and cancellation rates, available drivers, GPS freshness, gross bookings, driver earnings, 12% commission, payment status by provider, notification delivery and KYC throughput.
+Dashboards should show ride requests, matching latency, completion and cancellation rates, available drivers, GPS freshness, gross bookings, driver earnings, 14% commission, 2% first-ride referral rewards, payment status by provider, notification delivery and KYC throughput.
 
 Logs must use restricted access and short retention. Precise locations belong in Redis with the configured two-minute online TTL; do not add coordinates to logs or metrics.

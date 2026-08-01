@@ -1,5 +1,7 @@
 # LibSwiftRide
 
+> For the complete fictional local experience, see [DEMO_GUIDE.md](DEMO_GUIDE.md).
+
 LibSwiftRide is an enterprise ride-hailing platform designed for Liberia. This repository is a production-oriented monorepo containing the public website, passenger and driver experiences, fleet operations, administration, and a secure backend API.
 
 > Status: Phase 6 pre-deployment hardening on `phase-2-development`. No production credentials belong in this repository, and live payment APIs remain disabled.
@@ -19,7 +21,7 @@ LibSwiftRide is an enterprise ride-hailing platform designed for Liberia. This r
 
 ## Architecture
 
-The frontends are React/Vite applications sharing design primitives and API types. The API is Express, TypeScript, Prisma and PostgreSQL. Redis provides ephemeral location/availability storage and a path to queues and rate limiting. GPS updates use authenticated WebSockets; durable trip events and financial records remain in PostgreSQL.
+The frontends are React/Vite applications sharing design primitives and API types. The API is Express, TypeScript, Prisma and PostgreSQL. Redis provides ephemeral location/availability storage and a path to queues and rate limiting. GPS updates use authenticated WebSockets; passenger tracking automatically resumes active rides, reconnects with bounded backoff, and falls back to an authorized tracking snapshot while the socket recovers. Durable trip events and financial records remain in PostgreSQL.
 
 Key business rules are server-owned:
 
@@ -43,6 +45,15 @@ docker compose up -d postgres redis
 pnpm db:generate
 pnpm db:migrate
 pnpm dev
+```
+
+The local PostgreSQL container also creates an isolated `libswiftride_test`
+database owned by the test role on first startup. Apply migrations to it before
+running the database-backed acceptance suite:
+
+```bash
+DATABASE_URL=postgresql://test:test@localhost:5432/libswiftride_test pnpm db:deploy
+pnpm test
 ```
 
 The default local endpoints are:
@@ -75,6 +86,12 @@ pnpm compose:up      # full container stack
 ## Configuration
 
 Copy `.env.example` to `.env`. At minimum, replace JWT secrets. External payment methods remain disabled unless `PAYMENTS_ENABLED=true`; only enable them after official credentials and staging certification. CORS origins, database URLs, metrics access and payment webhook secrets are environment-specific.
+
+Interactive maps use MapLibre. Without a Mapbox token, the clients use the OpenStreetMap-derived demo style; setting `VITE_MAPBOX_ACCESS_TOKEN` switches to Mapbox while preserving the same marker, route, and future live-driver interfaces. Only use browser-safe public (`pk...`) Mapbox tokens with read-only map scopes and origin restrictions.
+
+Passenger road routes are calculated by the API through the routing adapter (`ROUTING_API_URL`, defaulting to the public OSRM demo endpoint, and `ROUTING_TIMEOUT_MS`). The API returns route geometry, road distance, and duration, then authoritatively calculates the fare from those server-obtained metrics. Ride creation recalculates the route and price instead of trusting values supplied by the browser. Configure an approved or self-hosted routing service with an operational SLA before production; the public demo service is for development only.
+
+Web push is opt-in. Set `VITE_WEB_PUSH_PUBLIC_KEY` to the public VAPID key to expose the enable-notifications control in Passenger and Driver portals. Browser subscriptions are stored through `/devices`; ride acceptance, arrival, boarding, start, completion, and cancellation queue both in-app and push notifications. Production delivery still requires the signed provider adapter configured by `PUSH_DELIVERY_URL` and `PUSH_DELIVERY_TOKEN`; never place the private VAPID key in a Vite variable.
 
 Liberia defaults use `Africa/Monrovia`, `LRD`, and an initial Monrovia service area. Pricing in this foundation is illustrative and must be approved by operations before launch.
 

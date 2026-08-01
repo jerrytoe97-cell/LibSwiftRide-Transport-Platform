@@ -1,6 +1,6 @@
 import express, { type NextFunction, type Request, type Response } from "express";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
 import { api } from "./routes.js";
 import { hashPassword, issueTokens } from "./auth.js";
@@ -26,12 +26,17 @@ let rideId = "";
 
 describe.sequential("end-to-end acceptance", () => {
   beforeAll(async () => {
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(async () => new Response(JSON.stringify({
+      code: "Ok",
+      routes: [{ distance: 6_800, duration: 1_080, geometry: { type: "LineString", coordinates: [[-10.8074, 6.3156], [-10.78, 6.31], [-10.7492, 6.3058]] } }]
+    }), { status: 200 })));
     await redis.connect().catch(() => undefined);
     const admin = await prisma.user.create({ data: { phone: `055${suffix.slice(-7)}`, email: `admin-${suffix}@example.test`, passwordHash: await hashPassword("Acceptance-only-password-123!"), firstName: "Acceptance", lastName: "Admin", role: "ADMIN", status: "ACTIVE" } });
     adminToken = (await issueTokens({ sub: admin.id, role: admin.role })).accessToken;
   });
 
   afterAll(async () => {
+    vi.unstubAllGlobals();
     await prisma.$disconnect();
     await redis.quit().catch(() => undefined);
   });
@@ -45,6 +50,10 @@ describe.sequential("end-to-end acceptance", () => {
     const token = notification.body.replace("Verification token: ", "");
     await request(app).post("/api/v1/auth/email-verification/confirm").send({ token }).expect(200);
     expect((await prisma.user.findUniqueOrThrow({ where: { id: passengerId } })).emailVerifiedAt).not.toBeNull();
+    const profile = await request(app).get("/api/v1/users/me").set("authorization", `Bearer ${passengerToken}`).expect(200);
+    expect(profile.body.data.role).toBe("PASSENGER");
+    await request(app).patch("/api/v1/users/me").set("authorization", `Bearer ${passengerToken}`).send({ firstName: "Updated", locale: "fr" }).expect(200);
+    await request(app).post("/api/v1/devices").set("authorization", `Bearer ${passengerToken}`).send({ platform: "web", pushToken: `acceptance-web-push-${suffix}` }).expect(200);
   });
 
   it("registers, submits and approves driver verification", async () => {
@@ -62,22 +71,56 @@ describe.sequential("end-to-end acceptance", () => {
   });
 
   it("books, assigns and completes the full ride lifecycle with SOS", async () => {
-    const booked = await request(app).post("/api/v1/rides").set("authorization", `Bearer ${passengerToken}`).set("idempotency-key", `ride-${suffix}`).send({
+    const locations = {
       pickup: { address: "Broad Street, Monrovia", latitude: 6.3156, longitude: -10.8074 },
-      destination: { address: "SKD Complex, Paynesville", latitude: 6.3058, longitude: -10.7492 },
+      destination: { address: "SKD Complex, Paynesville", latitude: 6.3058, longitude: -10.7492 }
+    };
+    const quote = await request(app).post("/api/v1/rides/quote").set("authorization", `Bearer ${passengerToken}`).send({ ...locations, rideType: "ECONOMY" }).expect(200);
+    expect(quote.body.data).toMatchObject({ estimatedDistanceM: 6_800, estimatedDurationSec: 1_080, rideType: "ECONOMY" });
+    expect(quote.body.data.route.geometry).toHaveLength(3);
+    const booked = await request(app).post("/api/v1/rides").set("authorization", `Bearer ${passengerToken}`).set("idempotency-key", `ride-${suffix}`).send({
+      ...locations,
+      rideType: "ECONOMY",
       paymentMethod: "CASH"
     }).expect(201);
     rideId = booked.body.data.id;
     await request(app).post(`/api/v1/dispatch/rides/${rideId}/assign`).set("authorization", `Bearer ${adminToken}`).send({ driverId }).expect(200);
-    for (const status of ["DRIVER_ARRIVING", "DRIVER_ARRIVED"]) await request(app).post(`/api/v1/rides/${rideId}/transitions`).set("authorization", `Bearer ${driverToken}`).send({ status }).expect(200);
+    await request(app).post(`/api/v1/drivers/rides/${rideId}/accept`).set("authorization", `Bearer ${driverToken}`).expect(200);
+    await request(app).post(`/api/v1/rides/${rideId}/transitions`).set("authorization", `Bearer ${driverToken}`).send({ status: "DRIVER_ARRIVED" }).expect(200);
     await request(app).post(`/api/v1/rides/${rideId}/transitions`).set("authorization", `Bearer ${passengerToken}`).send({ status: "PASSENGER_BOARDED" }).expect(200);
     await request(app).post(`/api/v1/rides/${rideId}/sos`).set("authorization", `Bearer ${passengerToken}`).send({ category: "SECURITY", latitude: 6.31, longitude: -10.8 }).expect(201);
     await request(app).post(`/api/v1/rides/${rideId}/transitions`).set("authorization", `Bearer ${driverToken}`).send({ status: "IN_PROGRESS" }).expect(200);
     await request(app).post(`/api/v1/rides/${rideId}/transitions`).set("authorization", `Bearer ${driverToken}`).send({ status: "COMPLETED" }).expect(200);
     const ride = await prisma.ride.findUniqueOrThrow({ where: { id: rideId } });
+    expect(ride.estimatedDistanceM).toBe(6_800);
+    expect(ride.estimatedDurationSec).toBe(1_080);
     expect(ride.driverEarningsMinor + ride.companyCommissionMinor).toBe(ride.fareMinor);
-    expect(ride.driverEarningsMinor).toBe(Math.floor(ride.fareMinor * 8_800 / 10_000));
+    expect(ride.driverEarningsMinor).toBe(ride.fareMinor - Math.round(ride.fareMinor * 1_400 / 10_000));
     expect(await prisma.safetyIncident.count({ where: { rideId } })).toBe(1);
+    expect(await prisma.notification.count({ where: { template: "sos", channel: "PUSH", data: { path: ["rideId"], equals: rideId } } })).toBeGreaterThanOrEqual(1);
+    const receipt = await request(app).get(`/api/v1/rides/${rideId}/receipt`).set("authorization", `Bearer ${passengerToken}`).expect(200);
+    expect(receipt.body.data.fare.driverEarningsMinor + receipt.body.data.fare.companyCommissionMinor).toBe(receipt.body.data.fare.totalMinor);
+    expect(receipt.body.data).toMatchObject({ route: { pickup: "Broad Street, Monrovia", destination: "SKD Complex, Paynesville" }, driver: { vehicle: { make: "Toyota", model: "Prius" } } });
+    expect(receipt.body.data.payment).toMatchObject({ method: "CASH", status: "CAPTURED" });
+    await request(app).post(`/api/v1/rides/${rideId}/ratings`).set("authorization", `Bearer ${passengerToken}`).send({ score: 5, comment: "Safe acceptance ride" }).expect(201);
+    const ratedRide = await request(app).get(`/api/v1/rides/${rideId}`).set("authorization", `Bearer ${passengerToken}`).expect(200);
+    expect(ratedRide.body.data.driver.rating).toMatchObject({ average: 5, count: 1 });
+    const driverWallet = await request(app).get("/api/v1/wallet").set("authorization", `Bearer ${driverToken}`).expect(200);
+    expect(driverWallet.body.data.balanceMinor).toBeGreaterThanOrEqual(ride.driverEarningsMinor);
+    expect(await prisma.payment.count({ where: { rideId, status: "CAPTURED", method: "CASH" } })).toBe(1);
+    expect(await prisma.rating.count({ where: { rideId, authorId: passengerId } })).toBe(1);
+    expect(await prisma.rideOffer.count({ where: { rideId, driverId, status: "ACCEPTED" } })).toBe(1);
+    expect(await prisma.notification.count({ where: { userId: passengerId, channel: "PUSH", data: { path: ["rideId"], equals: rideId } } })).toBeGreaterThanOrEqual(1);
+  });
+
+  it("allows only the assigned driver to decline an available offer", async () => {
+    const declinedRide = await prisma.ride.create({ data: { passengerId, driverId, idempotencyKey: `decline-${suffix}`, status: "DRIVER_ASSIGNED", pickupAddress: "Broad Street", pickupLatitude: 6.3156, pickupLongitude: -10.8074, destinationAddress: "Congo Town", destinationLatitude: 6.2900, destinationLongitude: -10.7700, estimatedDistanceM: 4_000, estimatedDurationSec: 900, fareMinor: 1_500, driverEarningsMinor: 1_320, companyCommissionMinor: 180, paymentMethod: "CASH" } });
+    await prisma.driver.update({ where: { id: driverId }, data: { status: "ON_TRIP" } });
+    await prisma.rideOffer.create({ data: { rideId: declinedRide.id, driverId } });
+    await request(app).post(`/api/v1/drivers/rides/${declinedRide.id}/reject`).set("authorization", `Bearer ${passengerToken}`).send({ reason: "UNAVAILABLE" }).expect(403);
+    await request(app).post(`/api/v1/drivers/rides/${declinedRide.id}/reject`).set("authorization", `Bearer ${driverToken}`).send({ reason: "UNAVAILABLE" }).expect(202);
+    expect(await prisma.rideOffer.count({ where: { rideId: declinedRide.id, driverId, status: "REJECTED" } })).toBe(1);
+    expect((await prisma.ride.findUniqueOrThrow({ where: { id: declinedRide.id } })).driverId).not.toBe(driverId);
   });
 
   it("protects cancellation, refunds and manual Mobile Money confirmation from replay", async () => {

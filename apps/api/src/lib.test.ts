@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { calculateSplit } from "./lib.js";
 
 describe("calculateSplit", () => {
-  it("allocates exactly 88% to the driver and 12% to the company", () => {
+  it("allocates exactly 86% to the driver and 14% to the company", () => {
     expect(calculateSplit(100_000)).toEqual({
-      driverEarningsMinor: 88_000,
-      companyCommissionMinor: 12_000
+      driverEarningsMinor: 86_000,
+      companyCommissionMinor: 14_000
     });
   });
 
