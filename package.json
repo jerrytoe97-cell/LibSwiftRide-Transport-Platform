@@ -14,6 +14,7 @@
     "db:generate": "pnpm --filter @libswiftride/api prisma:generate",
     "db:migrate": "pnpm --filter @libswiftride/api prisma:migrate",
     "db:deploy": "pnpm --filter @libswiftride/api prisma:deploy",
+    "recovery:validate": "pnpm --filter @libswiftride/api recovery:validate",
     "compose:up": "docker compose up --build"
   },
   "devDependencies": {

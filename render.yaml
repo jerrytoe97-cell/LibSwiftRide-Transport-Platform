@@ -30,6 +30,10 @@ services:
         value: "4000"
       - key: CORS_ORIGINS
         sync: false
+      - key: ROUTING_API_URL
+        sync: false
+      - key: ROUTE_POINT_RETENTION_DAYS
+        value: "30"
       - key: JWT_ACCESS_SECRET
         generateValue: true
       - key: JWT_REFRESH_SECRET
@@ -57,6 +61,24 @@ services:
       - key: VITE_API_URL
         sync: false
       - key: VITE_WS_URL
+        sync: false
+      - key: VITE_MAP_PROVIDER
+        sync: false
+      - key: VITE_MAPBOX_ACCESS_TOKEN
+        sync: false
+      - key: VITE_WEB_URL
+        sync: false
+      - key: VITE_PASSENGER_APP_URL
+        sync: false
+      - key: VITE_DRIVER_APP_URL
+        sync: false
+      - key: VITE_FLEET_APP_URL
+        sync: false
+      - key: VITE_ADMIN_APP_URL
+        sync: false
+      - key: VITE_DISPATCHER_APP_URL
+        sync: false
+      - key: VITE_BUSINESS_APP_URL
         sync: false
     routes: [{ type: rewrite, source: "/*", destination: "/index.html" }]
   - type: web
@@ -96,6 +118,14 @@ services:
     runtime: static
     buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @libswiftride/dispatcher build
     staticPublishPath: apps/dispatcher/dist
+    autoDeployTrigger: checksPass
+    envVars: *frontendEnv
+    routes: [{ type: rewrite, source: "/*", destination: "/index.html" }]
+  - type: web
+    name: libswiftride-business
+    runtime: static
+    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @libswiftride/business build
+    staticPublishPath: apps/business/dist
     autoDeployTrigger: checksPass
     envVars: *frontendEnv
     routes: [{ type: rewrite, source: "/*", destination: "/index.html" }]

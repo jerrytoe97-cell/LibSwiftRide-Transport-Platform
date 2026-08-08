@@ -7,6 +7,7 @@ export const redis = new Redis(config.REDIS_URL, {
   lazyConnect: true,
   maxRetriesPerRequest: 2
 });
+export const redisSubscriber = redis.duplicate();
 
 export const DRIVER_SHARE_BPS = 8_600;
 export const COMPANY_SHARE_BPS = 1_400;

@@ -16,6 +16,6 @@ Phase 3 remains on `phase-2-development`. It does not authorize deployment, a pu
 
 1. Obtain provider certification and signed webhook/refund specifications before enabling any live payment provider.
 2. Configure a jurisdiction-reviewed emergency-response playbook and staffed escalation rota.
-3. Add a scheduled route-point retention/anonymization job and document the approved duration.
+3. Validate the configured 30-day route-point retention period with privacy/legal owners and capture staging cleanup evidence.
 4. Load-test WebSocket fan-out and move route sampling to an asynchronous ingestion worker before high-volume launch.
 5. Reconcile payouts and refunds against provider settlement files before enabling automated disbursement.

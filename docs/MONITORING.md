@@ -20,3 +20,5 @@ The API emits structured JSON through Pino. Every request receives an `x-request
 Dashboards should show ride requests, matching latency, completion and cancellation rates, available drivers, GPS freshness, gross bookings, driver earnings, 14% commission, 2% first-ride referral rewards, payment status by provider, notification delivery and KYC throughput.
 
 Logs must use restricted access and short retention. Precise locations belong in Redis with the configured two-minute online TTL; do not add coordinates to logs or metrics.
+
+Use the guarded staging scenario and evidence checklist in [LOAD_TESTING.md](LOAD_TESTING.md) before release promotion. A load-test pass requires both k6 thresholds and healthy dependency dashboards throughout the run.

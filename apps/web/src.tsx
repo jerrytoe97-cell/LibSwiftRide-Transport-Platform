@@ -19,7 +19,7 @@ const allRoutes = new Set([
   "/", "/about", "/services", "/safety", "/business", "/drive", "/leadership",
   "/leadership/jerry-toe", "/leadership/matthew-gaye",
   "/leadership/jerry-g-toe", "/leadership/matthew-p-gaye-jr", "/contact", "/faq",
-  "/privacy", "/terms", "/investors",
+  "/privacy", "/terms", "/driver-terms", "/investors",
 ]);
 
 const publicEnvironment = (import.meta as ImportMeta & { env?: Record<string, string> }).env;
@@ -109,10 +109,10 @@ function Footer() {
     ["Company", [["About","/about"],["Leadership","/leadership"],["Investors & partners","/investors"],["Careers","/contact?intent=careers"],["Contact","/contact"]]],
     ["Services", [["Passenger rides","/services"],["Airport transfers","/services"],["Business","/business"],["Delivery","/services"]]],
     ["Support", [["Safety","/safety"],["FAQ","/faq"],["Help centre","/contact?intent=support"]]],
-    ["Legal", [["Privacy","/privacy"],["Terms","/terms"]]],
+    ["Legal", [["Privacy Policy","/privacy"],["Terms of Service","/terms"],["Driver Terms","/driver-terms"],["Contact","/contact"]]],
   ] as const;
   return <footer className="site-footer"><div className="footer-main">
-    <div className="footer-brand"><Link href="/" className="logo light"><img className="brand-logo-image" src="/brand/libswiftride-logo.png" alt="LibSwiftRide official logo" loading="lazy" /><span>LibSwift<span>Ride</span></span></Link><p>Technology-powered transportation built around Liberia&apos;s people, communities and businesses.</p><div className="footer-company-details"><span>Headquartered in Monrovia, Liberia</span><span>Serving Greater Monrovia at launch</span><Link href="/contact">Contact our mobility team</Link></div><div className="socials" aria-label="Social media placeholders"><a href="#facebook" aria-label="Facebook">f</a><a href="#linkedin" aria-label="LinkedIn">in</a><a href="#instagram" aria-label="Instagram">ig</a><a href="#x" aria-label="X">x</a></div></div>
+    <div className="footer-brand"><Link href="/" className="logo light"><img className="brand-logo-image" src="/brand/libswiftride-logo.png" alt="LibSwiftRide official logo" loading="lazy" /><span>LibSwift<span>Ride</span></span></Link><p>Technology-powered transportation built around Liberia&apos;s people, communities and businesses.</p><div className="footer-company-details"><span>Headquartered in Monrovia, Liberia</span><span>Serving Greater Monrovia at launch</span><Link href="/contact">Contact our mobility team</Link></div><div className="socials" aria-label="LibSwiftRide social media links"><a href="https://www.facebook.com/" target="_blank" rel="noreferrer" aria-label="Facebook">f</a><a href="https://www.linkedin.com/" target="_blank" rel="noreferrer" aria-label="LinkedIn">in</a><a href="https://www.instagram.com/" target="_blank" rel="noreferrer" aria-label="Instagram">ig</a><a href="https://x.com/" target="_blank" rel="noreferrer" aria-label="X">x</a></div></div>
     {columns.map(([title,links]) => <div className="footer-column" key={title}><h3>{title}</h3>{links.map(([label,href]) => <Link href={href} key={label}>{label}</Link>)}</div>)}
   </div><div className="footer-bottom"><span>© 2026 LibSwiftRide. All rights reserved.</span><span>Safe rides. Anytime. Anywhere. · Liberia</span></div></footer>;
 }
@@ -144,8 +144,8 @@ function MobilityVisual() {
     <img src="/images/libswiftride-monrovia-hero.png" alt="A LibSwiftRide driver welcoming a passenger beside a vehicle in Monrovia" />
     <div className="tracking-route" aria-hidden="true"><i /><i /><i /><span /><div className={`tracking-car tracking-car-${trackingStep}`}>LS</div></div>
     <div className="ride-card live-ride-card" aria-live="polite"><div className="car-icon">LS</div><div><strong>{update.status}</strong><small>{update.location} · Monrovia</small></div><b>{update.eta}</b></div>
-    <div className="visual-label"><span className="pulse" /> Live GPS demo active</div>
-    <div className="gps-demo-label"><span>Demonstration route</span><small>Updates automatically · No personal location collected</small></div>
+    <div className="visual-label"><span className="pulse" /> Simulated GPS preview</div>
+    <div className="gps-demo-label"><span>Demonstration Route</span><small>Simulated journey · No passenger or personal location data</small></div>
   </div>;
 }
 
@@ -217,10 +217,11 @@ function BookingPreview() {
 
 function TrustFeatures() {
   const reasons = [
-    ["01", "Know who is driving", "See verified driver and vehicle details before your journey begins."],
-    ["02", "Know what to expect", "Review fare guidance, pickup details and trip status in one clear experience."],
-    ["03", "Stay connected", "Follow live journey updates and share trip information with people you trust."],
-    ["04", "Get local support", "Reach a Liberia-based team that understands local routes and rider needs."],
+    ["01", "Driver verification", "Identity, licence, vehicle and onboarding checks support accountable service across Greater Monrovia."],
+    ["02", "Passenger safety", "Ride PINs, trip sharing and clear driver details help passengers travel with greater confidence."],
+    ["03", "Emergency support", "Safety escalation and incident workflows connect riders and drivers with Liberia-based support."],
+    ["04", "Transparent pricing", "Fare guidance and trip details are presented clearly before a passenger confirms a journey."],
+    ["05", "Secure payments", "Protected payment workflows are being prepared; live payment providers remain disabled in this demonstration."],
   ];
   return <section className="why-band" aria-labelledby="trust-title"><div className="container"><div className="why-intro"><div><Eyebrow>Trust, built into every trip</Eyebrow><h2 id="trust-title">More confidence from pickup to destination.</h2></div><p>LibSwiftRide brings identity, trip and support information together so passengers and drivers can make informed decisions at every stage.</p></div><div className="why-grid">{reasons.map(([number,title,body])=><article key={title}><span>{number}</span><h3>{title}</h3><p>{body}</p></article>)}</div><div className="trust-footer"><span>Designed in Liberia</span><span>Driver-first earning model</span><span>86% of every completed fare goes to the driver</span></div></div></section>;
 }
@@ -422,6 +423,10 @@ function LegalPage({ type }: { type: "privacy" | "terms" }) {
   return <Layout><PageHero eyebrow={privacy ? "Privacy Policy" : "Terms of Service"} title={privacy ? "Your information deserves careful protection." : "Clear expectations for using LibSwiftRide."} description={`Local demonstration policy summary · Last updated July 2026`} /><section className="section"><article className="container narrow prose"><h2>{privacy ? "Information we handle" : "Using the platform"}</h2><p>{privacy ? "LibSwiftRide processes account, booking, trip, location, payment-status and support information needed to provide mobility services. Sensitive information is limited, access-controlled and never intended for public display." : "Users must provide accurate account information, respect passengers and drivers, follow safety requirements and use the platform only for lawful transportation and delivery activities."}</p><h2>{privacy ? "How information is used" : "Fares and payments"}</h2><p>{privacy ? "Information supports booking, dispatch, safety, customer support, fraud prevention, billing and service improvement. Precise location history is restricted and retained only according to documented operational needs." : "Fare estimates and final charges are calculated by the platform. Available payment methods and any fees are shown during booking. Provider availability may vary by service area."}</p><h2>{privacy ? "Your choices" : "Safety and conduct"}</h2><p>{privacy ? "You may request access, correction or account support through the Contact page. Some records must be retained for safety, legal, financial or dispute-resolution requirements." : "Harassment, unsafe conduct, fraud and misuse are prohibited. LibSwiftRide may suspend access when necessary to protect users, investigate incidents or comply with applicable requirements."}</p><h2>Contact</h2><p>Questions about this policy can be directed through the LibSwiftRide Contact page. Final production policies will be reviewed for applicable Liberian requirements before launch.</p></article></section></Layout>;
 }
 
+function DriverTermsPage() {
+  return <Layout><PageHero eyebrow="Driver Terms" title="Clear standards for earning with LibSwiftRide." description="Local demonstration policy summary · Last updated August 2026" /><section className="section"><article className="container narrow prose"><h2>Driver eligibility</h2><p>Drivers must provide accurate identity, licence, vehicle, insurance and other required information. Access to trips begins only after verification and onboarding review.</p><h2>Trips and earnings</h2><p>Drivers receive 86% of every completed fare. LibSwiftRide retains a 14% platform commission. Trip records, adjustments and approved incentives are shown transparently.</p><h2>Safety and conduct</h2><p>Drivers must operate safely, treat passengers respectfully, protect passenger information and report incidents promptly. Fraud, harassment, unsafe driving and account sharing are prohibited.</p><h2>Demonstration status</h2><p>This preview does not activate real trips or live payments. Final driver terms will be reviewed for applicable Liberian requirements before public launch.</p></article></section></Layout>;
+}
+
 function NotFound() {
   return <Layout><section className="not-found"><Eyebrow>404</Eyebrow><h1>This road does not go there.</h1><p>The page may have moved, but your next journey is one click away.</p><Link href="/" className="button">Return home</Link></section></Layout>;
 }
@@ -434,7 +439,7 @@ function App() {
     return () => window.removeEventListener("popstate", update);
   }, []);
   useEffect(() => {
-    const labels: Record<string,string> = {"/":"Liberia Moves Better","/about":"About","/services":"Services","/safety":"Safety","/business":"Business","/drive":"Drive","/leadership":"Leadership","/investors":"Investment & Partnerships","/leadership/jerry-toe":"Jerry G. Toe","/leadership/matthew-gaye":"Matthew P. Gaye Jr.","/leadership/jerry-g-toe":"Jerry G. Toe","/leadership/matthew-p-gaye-jr":"Matthew P. Gaye Jr.","/contact":"Contact","/faq":"FAQ","/privacy":"Privacy Policy","/terms":"Terms of Service"};
+    const labels: Record<string,string> = {"/":"Liberia Moves Better","/about":"About","/services":"Services","/safety":"Safety","/business":"Business","/drive":"Drive","/leadership":"Leadership","/investors":"Investment & Partnerships","/leadership/jerry-toe":"Jerry G. Toe","/leadership/matthew-gaye":"Matthew P. Gaye Jr.","/leadership/jerry-g-toe":"Jerry G. Toe","/leadership/matthew-p-gaye-jr":"Matthew P. Gaye Jr.","/contact":"Contact","/faq":"FAQ","/privacy":"Privacy Policy","/terms":"Terms of Service","/driver-terms":"Driver Terms"};
     document.title = `${labels[path] ?? "LibSwiftRide"} | LibSwiftRide`;
   }, [path]);
   if (!allRoutes.has(path)) return <NotFound />;
@@ -452,6 +457,7 @@ function App() {
   if (path === "/faq") return <Layout><PageHero eyebrow="Frequently asked questions" title="Useful answers for every journey." description="Booking, pricing, driving, safety, business travel and support—all in one place." /><FaqPreview full /></Layout>;
   if (path === "/privacy") return <LegalPage type="privacy" />;
   if (path === "/terms") return <LegalPage type="terms" />;
+  if (path === "/driver-terms") return <DriverTermsPage />;
   return <NotFound />;
 }
 

@@ -22,6 +22,7 @@ COPY --from=build --chown=app:app /app/apps/api/node_modules ./apps/api/node_mod
 COPY --from=build --chown=app:app /app/apps/api/dist ./apps/api/dist
 COPY --from=build --chown=app:app /app/apps/api/prisma ./apps/api/prisma
 COPY --from=build --chown=app:app /app/apps/api/package.json ./apps/api/package.json
+COPY --chown=app:app docs/openapi.yaml ./docs/openapi.yaml
 USER app
 EXPOSE 4000
 CMD ["node", "apps/api/dist/server.js"]

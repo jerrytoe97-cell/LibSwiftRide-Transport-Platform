@@ -20,12 +20,12 @@ This foundation is not a claim that an unconfigured greenfield platform can safe
 
 | Priority | Missing capability |
 | --- | --- |
-| P0 | Multi-replica GPS fan-out, production load testing and dispatch race simulation |
+| P0 | Execute and review the guarded staging load scenario (the k6 harness, thresholds and evidence runbook are checked in; multi-replica GPS/chat fan-out and concurrent ride acceptance are implemented) |
 | P0 | Real map/geocoding/routing provider and Liberia coverage validation |
 | P0 | Provider-certified mobile-money/card integrations and daily reconciliation evidence |
 | P0 | Double-entry ledger, driver/fleet settlements, tips, promotions and dispute handling |
 | P0 | KYC object storage/provider configuration, safety incidents and emergency workflows |
-| P0 | Complete generated OpenAPI contract, browser/device e2e tests, load tests and security review |
+| P0 | Expand the canonical runtime OpenAPI contract to every route, add browser/device e2e tests and complete an independent security review (the runtime now serves the checked-in contract and tests reject stale documented operations) |
 | P0 | Cloud target, managed secrets, TLS/DNS, backups/PITR, observability and on-call |
 | P1 | Native or installable mobile packaging, offline/poor-network behavior and push notifications |
 | P1 | PostGIS dispatch search, matching strategy, surge/zone governance and scheduled rides |

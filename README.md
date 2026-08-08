@@ -25,8 +25,8 @@ The frontends are React/Vite applications sharing design primitives and API type
 
 Key business rules are server-owned:
 
-- Drivers receive **88%** of completed-trip fare revenue.
-- LibSwiftRide receives a **12%** commission.
+- Drivers receive **86%** of completed-trip fare revenue.
+- LibSwiftRide receives a **14%** commission.
 - All money is stored as integer minor units (Liberian cents).
 - Ride and payment state changes are idempotent and auditable.
 - Payment providers are integrated behind an adapter; the included sandbox provider enables local development.
@@ -65,7 +65,7 @@ The default local endpoints are:
 - Admin: `http://localhost:3004`
 - Dispatcher: `http://localhost:3005`
 - Business: `http://localhost:3006`
-- API and OpenAPI JSON: `http://localhost:4000/api/v1`, `http://localhost:4000/openapi.json`
+- API and OpenAPI contract: `http://localhost:4000/api/v1`, `http://localhost:4000/openapi.yaml` (`/openapi.json` redirects to the canonical YAML document)
 - Health checks: `http://localhost:4000/health/live`, `http://localhost:4000/health/ready`
 
 Seeded accounts are intentionally not included. Create users through the registration endpoint in non-production environments.

@@ -56,7 +56,7 @@ Implemented and automated:
 4. Add retry/offline UX for booking, GPS, lifecycle and payment confirmation.
 5. Expand OpenAPI from the current partial contract and serve the same version from the API.
 6. Add support-ticket and safety-case operational workflows.
-7. Define GPS retention enforcement and privacy-request automation.
+7. Complete privacy-request automation and obtain privacy/legal approval for the enforced configurable GPS retention period.
 
 ### P2 — scale and optimization
 

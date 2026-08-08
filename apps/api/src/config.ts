@@ -8,12 +8,13 @@ const optionalMobileMoneyNumber = z.preprocess(
   z.string().regex(/^0\d{9}$/, "Mobile Money numbers must be 10-digit local numbers").optional()
 );
 
-const schema = z.object({
+export const environmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
   ROUTING_API_URL: z.string().url().default("https://router.project-osrm.org"),
   ROUTING_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(8_000),
+  ROUTE_POINT_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
   API_PORT: z.coerce.number().int().positive().default(4000),
   CORS_ORIGINS: z.string().min(1),
   JWT_ACCESS_SECRET: z.string().min(32),
@@ -50,9 +51,35 @@ const schema = z.object({
   if (environment.NODE_ENV === "production" && environment.PAYMENTS_ENABLED && environment.PAYMENT_PROVIDER !== "mobile-money") {
     context.addIssue({ code: "custom", path: ["PAYMENT_PROVIDER"], message: "Production payments require PAYMENT_PROVIDER=mobile-money" });
   }
+  if (environment.JWT_ACCESS_SECRET === environment.JWT_REFRESH_SECRET) {
+    context.addIssue({ code: "custom", path: ["JWT_REFRESH_SECRET"], message: "Access and refresh secrets must be different" });
+  }
+  if (environment.NODE_ENV === "production") {
+    const origins = environment.CORS_ORIGINS.split(",").map((origin) => origin.trim());
+    if (origins.some((origin) => origin === "*" || !origin.startsWith("https://"))) {
+      context.addIssue({ code: "custom", path: ["CORS_ORIGINS"], message: "Production CORS origins must be exact HTTPS origins" });
+    }
+    if (new Set(origins).size !== origins.length) {
+      context.addIssue({ code: "custom", path: ["CORS_ORIGINS"], message: "Production CORS origins must not contain duplicates" });
+    }
+    if (environment.ROUTING_API_URL.includes("router.project-osrm.org")) {
+      context.addIssue({ code: "custom", path: ["ROUTING_API_URL"], message: "Production requires an approved routing service, not the public demo endpoint" });
+    }
+    for (const [field, secret] of [["JWT_ACCESS_SECRET", environment.JWT_ACCESS_SECRET], ["JWT_REFRESH_SECRET", environment.JWT_REFRESH_SECRET], ["PAYMENT_WEBHOOK_SECRET", environment.PAYMENT_WEBHOOK_SECRET]] as const) {
+      if (/replace|example|change|development|test-secret/i.test(secret)) {
+        context.addIssue({ code: "custom", path: [field], message: `${field} contains a placeholder value` });
+      }
+    }
+  }
 });
 
-const parsed = schema.safeParse(process.env);
+export function parseEnvironment(environment: NodeJS.ProcessEnv) {
+  const parsed = environmentSchema.safeParse(environment);
+  if (!parsed.success) throw new Error(`Invalid environment: ${parsed.error.message}`);
+  return { ...parsed.data, corsOrigins: parsed.data.CORS_ORIGINS.split(",").map((origin) => origin.trim()) };
+}
+
+const parsed = environmentSchema.safeParse(process.env);
 if (!parsed.success) {
   throw new Error(`Invalid environment: ${parsed.error.message}`);
 }

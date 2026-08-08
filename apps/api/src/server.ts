@@ -11,12 +11,15 @@ import { ZodError } from "zod";
 import { api } from "./routes.js";
 import { verifyAccessToken } from "./auth.js";
 import { config } from "./config.js";
-import { prisma, redis } from "./lib.js";
+import { prisma, redis, redisSubscriber } from "./lib.js";
 import { activateScheduledRides, updateDriverLocation } from "./services/dispatch.js";
 import { deliverPendingNotifications, queueNotification } from "./services/notifications.js";
 import { logger } from "./logger.js";
 import { distanceMetres, estimateEtaSeconds } from "./services/tracking.js";
 import { queueDocumentExpiryReminders } from "./services/document-reminders.js";
+import { decodeRideRealtimeEvent, publishRideRealtimeEvent, RIDE_REALTIME_CHANNEL } from "./services/ride-realtime.js";
+import { loadOpenApiYaml } from "./services/openapi.js";
+import { purgeExpiredRoutePoints } from "./services/location-retention.js";
 
 const app = express();
 collectDefaultMetrics({ prefix: "libswiftride_" });
@@ -70,7 +73,8 @@ app.get("/metrics", async (req, res) => {
   res.setHeader("content-type", register.contentType);
   res.send(await register.metrics());
 });
-app.get("/openapi.json", (_req, res) => res.json({ openapi: "3.1.0", info: { title: "LibSwiftRide API", version: "0.1.0" }, servers: [{ url: "/api/v1" }] }));
+app.get("/openapi.yaml", (_req, res) => res.type("application/yaml").send(loadOpenApiYaml()));
+app.get("/openapi.json", (_req, res) => res.redirect(308, "/openapi.yaml"));
 app.use("/api/v1", api);
 app.use((_req, res) => res.status(404).json({ error: { code: "NOT_FOUND", message: "Route not found" } }));
 app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
@@ -82,6 +86,25 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws" });
 const rideSubscriptions = new Map<string, Set<import("ws").WebSocket>>();
+function broadcastToLocalRide(rideId: string, payload: string) {
+  for (const subscriber of rideSubscriptions.get(rideId) ?? []) if (subscriber.readyState === 1) subscriber.send(payload);
+}
+
+redisSubscriber.on("message", (channel, value) => {
+  if (channel !== RIDE_REALTIME_CHANNEL) return;
+  const event = decodeRideRealtimeEvent(value);
+  if (event) broadcastToLocalRide(event.rideId, event.payload);
+});
+
+async function broadcastToRide(rideId: string, payload: string) {
+  try {
+    const subscriberCount = await publishRideRealtimeEvent(redis, { rideId, payload });
+    if (subscriberCount === 0) broadcastToLocalRide(rideId, payload);
+  } catch (error) {
+    logger.warn({ err: error, rideId }, "Redis ride fan-out unavailable; using local delivery");
+    broadcastToLocalRide(rideId, payload);
+  }
+}
 wss.on("connection", async (socket, request) => {
   const protocols = String(request.headers["sec-websocket-protocol"] ?? "").split(",").map((value) => value.trim());
   const encodedToken = protocols.find((value) => value.startsWith("auth."));
@@ -120,7 +143,7 @@ wss.on("connection", async (socket, request) => {
             : { latitude: Number(activeRide.pickupLatitude), longitude: Number(activeRide.pickupLongitude) };
           const remainingDistanceM = distanceMetres(location, target);
           const message = JSON.stringify({ type: "driver.location", rideId: activeRide.id, latitude: location.latitude, longitude: location.longitude, at: location.at, remainingDistanceM, etaSeconds: estimateEtaSeconds(remainingDistanceM, Number.isFinite(event.speedMps) ? event.speedMps : undefined) });
-          for (const subscriber of rideSubscriptions.get(activeRide.id) ?? []) if (subscriber.readyState === 1) subscriber.send(message);
+          await broadcastToRide(activeRide.id, message);
         }
         socket.send(JSON.stringify({ type: "location.ack", at: location.at }));
       }
@@ -134,7 +157,7 @@ wss.on("connection", async (socket, request) => {
         if (!participant || ["REQUESTED", "SEARCHING", "COMPLETED", "CANCELLED"].includes(ride.status)) throw new Error("Chat unavailable");
         const message = await prisma.chatMessage.create({ data: { rideId: ride.id, senderId: user.sub, content }, select: { id: true, rideId: true, senderId: true, content: true, createdAt: true } });
         const payload = JSON.stringify({ type: "chat.message", ...message });
-        for (const subscriber of rideSubscriptions.get(ride.id) ?? []) if (subscriber.readyState === 1) subscriber.send(payload);
+        await broadcastToRide(ride.id, payload);
         const recipientId = ride.passengerId === user.sub ? ride.driver!.userId : ride.passengerId;
         await queueNotification({ userId: recipientId, channel: "PUSH", template: "ride-chat", title: "New ride message", body: "You have a new message from your ride participant.", data: { rideId: ride.id } }).catch(() => undefined);
       }
@@ -149,7 +172,10 @@ wss.on("connection", async (socket, request) => {
 });
 
 server.listen(config.API_PORT, async () => {
-  await redis.connect().catch(() => undefined);
+  await Promise.all([
+    redis.connect(),
+    redisSubscriber.connect().then(() => redisSubscriber.subscribe(RIDE_REALTIME_CHANNEL))
+  ]).catch((error) => logger.error({ err: error }, "Redis startup connection failed"));
   logger.info({ port: config.API_PORT }, "API listening");
 });
 
@@ -165,13 +191,20 @@ const documentReminderTimer = setInterval(() => {
   queueDocumentExpiryReminders().catch((error) => logger.error({ err: error }, "document expiry reminder cycle failed"));
 }, 6 * 60 * 60_000);
 documentReminderTimer.unref();
+const locationRetentionTimer = setInterval(() => {
+  purgeExpiredRoutePoints(config.ROUTE_POINT_RETENTION_DAYS)
+    .then(({ deleted, cutoff }) => { if (deleted) logger.info({ deleted, cutoff }, "expired route points purged"); })
+    .catch((error) => logger.error({ err: error }, "route-point retention cycle failed"));
+}, 6 * 60 * 60_000);
+locationRetentionTimer.unref();
 
 async function shutdown() {
   clearInterval(notificationTimer);
   clearInterval(scheduledRideTimer);
   clearInterval(documentReminderTimer);
+  clearInterval(locationRetentionTimer);
   server.close();
-  await Promise.allSettled([prisma.$disconnect(), redis.quit()]);
+  await Promise.allSettled([prisma.$disconnect(), redis.quit(), redisSubscriber.quit()]);
 }
 process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);

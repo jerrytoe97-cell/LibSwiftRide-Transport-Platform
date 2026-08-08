@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { apiClient, money } from "@libswiftride/sdk";
 import { Action, Map, Shell, Stat } from "@libswiftride/ui";
 import "@libswiftride/ui/styles.css";
+import { startLocationTracking, type LocationFailure } from "./location-runtime.js";
 
 type ActiveRide = {
   id: string; status: string; pickupAddress: string; pickupLatitude: number; pickupLongitude: number;
@@ -37,6 +38,9 @@ function App() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [message, setMessage] = useState("Sign in to load your driver profile.");
   const [coords, setCoords] = useState({ latitude: 6.3156, longitude: -10.8074 });
+  const [gpsStatus, setGpsStatus] = useState<"off" | "requesting" | "live" | "blocked" | "unavailable">("off");
+  const [gpsAccuracyM, setGpsAccuracyM] = useState<number | null>(null);
+  const [lastLocationAt, setLastLocationAt] = useState<Date | null>(null);
   const [schedule, setSchedule] = useState<AvailabilityWindow[]>([]);
   const [history, setHistory] = useState<RideHistory[]>([]);
   const [startsAt, setStartsAt] = useState("");
@@ -51,7 +55,8 @@ function App() {
   const [profilePhoto, setProfilePhoto] = useState<PhotoPreview | null>(null);
   const [vehiclePhoto, setVehiclePhoto] = useState<PhotoPreview | null>(null);
   const socket = useRef<WebSocket | null>(null);
-  const watchId = useRef<number | null>(null);
+  const stopLocationTracking = useRef<(() => Promise<void>) | null>(null);
+  const lastLocationSentAt = useRef(0);
 
   function selectPhoto(file: File | undefined, current: PhotoPreview | null, update: (photo: PhotoPreview | null) => void) {
     if (!file) return;
@@ -112,7 +117,7 @@ function App() {
     load().catch((error: Error) => setMessage(error.message));
     return () => {
       socket.current?.close();
-      if (watchId.current != null) navigator.geolocation.clearWatch(watchId.current);
+      void stopLocationTracking.current?.();
     };
   }, []);
 
@@ -139,17 +144,38 @@ function App() {
       if (status === "OFFLINE") {
         socket.current?.close();
         socket.current = null;
-        if (watchId.current != null) navigator.geolocation.clearWatch(watchId.current);
+        await stopLocationTracking.current?.();
+        stopLocationTracking.current = null;
+        setGpsStatus("off");
+        setGpsAccuracyM(null);
+        setLastLocationAt(null);
       } else {
+        setGpsStatus("requesting");
         const connection = apiClient.connect();
         socket.current = connection;
         connection.onopen = () => {
           if (dashboard?.activeRide) connection.send(JSON.stringify({ type: "ride.subscribe", rideId: dashboard.activeRide.id }));
-          watchId.current = navigator.geolocation.watchPosition((position) => {
-            const location = { latitude: position.coords.latitude, longitude: position.coords.longitude };
+          const locationError = (failure: LocationFailure) => {
+            setGpsStatus(failure === "PERMISSION_DENIED" || failure === "NOT_SECURE" ? "blocked" : "unavailable");
+            setMessage(failure === "NOT_SECURE" ? "Live GPS requires a secure HTTPS connection on real devices." : failure === "PERMISSION_DENIED" ? "Location permission is blocked. Enable precise location access before going online." : "Live GPS is unavailable. Check device location and network access, then try again.");
+            connection.close();
+            socket.current = null;
+            void stopLocationTracking.current?.();
+            stopLocationTracking.current = null;
+            void apiClient.request("/drivers/me/availability", { method: "POST", body: JSON.stringify({ status: "OFFLINE" }) }).then(load).catch(() => undefined);
+          };
+          void startLocationTracking({ onLocation: (sample) => {
+            const location = { latitude: sample.latitude, longitude: sample.longitude };
             setCoords(location);
-            connection.send(JSON.stringify({ type: "driver.location", ...location, heading: position.coords.heading, speedMps: position.coords.speed }));
-          }, () => setMessage("Location permission is required while online."), { enableHighAccuracy: true, maximumAge: 5_000 });
+            setGpsStatus("live");
+            setGpsAccuracyM(Math.round(sample.accuracyM));
+            setLastLocationAt(new Date(sample.capturedAt));
+            const now = Date.now();
+            if (connection.readyState === WebSocket.OPEN && now - lastLocationSentAt.current >= 2_000) {
+              lastLocationSentAt.current = now;
+              connection.send(JSON.stringify({ type: "driver.location", ...location, heading: sample.heading, speedMps: sample.speedMps, capturedAt: sample.capturedAt }));
+            }
+          }, onError: locationError }).then((stop) => { stopLocationTracking.current = stop; });
         };
         connection.onmessage = (event) => {
           const update = JSON.parse(event.data) as { type: string; id?: string; senderId?: string; content?: string; createdAt?: string };
@@ -270,6 +296,7 @@ function App() {
         <div><span className="eyebrow">Driver dashboard</span><h1>Welcome{dashboard?.driver.firstName ? `, ${dashboard.driver.firstName}` : ""}.</h1><p>Current location: Monrovia</p></div>
         <Action className={online ? "availability-online" : ""} disabled={dashboard?.driver.status === "ON_TRIP"} onClick={() => setAvailability(online ? "OFFLINE" : "AVAILABLE")}>{dashboard?.driver.status === "ON_TRIP" ? "Trip active" : online ? "● Online — go offline" : "Go online"}</Action>
       </div>
+      <p className={`notice gps-status gps-${gpsStatus}`} aria-live="polite"><strong>Live GPS:</strong> {gpsStatus === "live" ? `sharing securely${gpsAccuracyM != null ? ` · accuracy about ${gpsAccuracyM} m` : ""}${lastLocationAt ? ` · updated ${lastLocationAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : ""}` : gpsStatus === "requesting" ? "waiting for device permission…" : gpsStatus === "blocked" ? "permission blocked" : gpsStatus === "unavailable" ? "device signal unavailable" : "off — location is not being shared"}</p>
       {message && <p className="notice">{message}</p>}
       <div className="grid">
         <Stat label="Today" value={money(dashboard?.earnings.today.driverEarningsMinor ?? 0)} detail={`${dashboard?.earnings.today.completedRides ?? 0} completed rides`} />

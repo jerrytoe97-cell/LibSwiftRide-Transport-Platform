@@ -22,7 +22,9 @@ const environment = (import.meta as ImportMeta & { env?: Record<string, string> 
 const demoEnabled = environment?.VITE_DEMO_MODE === "true";
 const pushConfigured = Boolean(environment?.VITE_WEB_PUSH_PUBLIC_KEY?.trim());
 const apiUrl = environment?.VITE_API_URL ?? "http://localhost:4000/api/v1";
-const mapboxAccessToken = environment?.VITE_MAPBOX_ACCESS_TOKEN?.trim();
+const requestedMapProvider = environment?.VITE_MAP_PROVIDER?.trim().toLowerCase() || "preview";
+const configuredMapboxToken = environment?.VITE_MAPBOX_ACCESS_TOKEN?.trim();
+const mapboxAccessToken = requestedMapProvider === "mapbox" && configuredMapboxToken?.startsWith("pk.") ? configuredMapboxToken : undefined;
 const brandLogoUrl = new URL("./assets/libswiftride-logo.png", import.meta.url).href;
 
 function initialTheme(): ThemeMode {

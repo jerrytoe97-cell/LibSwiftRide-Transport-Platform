@@ -5,6 +5,8 @@ import { ZodError } from "zod";
 import { api } from "./routes.js";
 import { hashPassword, issueTokens } from "./auth.js";
 import { prisma, redis } from "./lib.js";
+import { updateDriverLocation } from "./services/dispatch.js";
+import { purgeExpiredRoutePoints } from "./services/location-retention.js";
 
 const app = express();
 app.use(express.json());
@@ -70,6 +72,23 @@ describe.sequential("end-to-end acceptance", () => {
     await request(app).post("/api/v1/drivers/me/availability").set("authorization", `Bearer ${driverToken}`).send({ status: "AVAILABLE" }).expect(200);
   });
 
+  it("allows exactly one winner when the assigned driver accepts concurrently", async () => {
+    const concurrentRide = await prisma.ride.create({ data: { passengerId, driverId, idempotencyKey: `concurrent-accept-${suffix}`, status: "DRIVER_ASSIGNED", pickupAddress: "Broad Street", pickupLatitude: 6.3156, pickupLongitude: -10.8074, destinationAddress: "Congo Town", destinationLatitude: 6.2900, destinationLongitude: -10.7700, estimatedDistanceM: 4_000, estimatedDurationSec: 900, fareMinor: 1_500, driverEarningsMinor: 1_290, companyCommissionMinor: 210, paymentMethod: "CASH" } });
+    await prisma.driver.update({ where: { id: driverId }, data: { status: "ON_TRIP" } });
+    await prisma.rideOffer.create({ data: { rideId: concurrentRide.id, driverId } });
+
+    const accept = () => request(app).post(`/api/v1/drivers/rides/${concurrentRide.id}/accept`).set("authorization", `Bearer ${driverToken}`);
+    const responses = await Promise.all([accept(), accept()]);
+
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+    expect(await prisma.rideEvent.count({ where: { rideId: concurrentRide.id, type: "RIDE_ACCEPTED" } })).toBe(1);
+    expect(await prisma.rideOffer.count({ where: { rideId: concurrentRide.id, driverId, status: "ACCEPTED" } })).toBe(1);
+    expect((await prisma.ride.findUniqueOrThrow({ where: { id: concurrentRide.id } })).acceptedAt).not.toBeNull();
+
+    await prisma.ride.update({ where: { id: concurrentRide.id }, data: { status: "CANCELLED", cancelledAt: new Date() } });
+    await prisma.driver.update({ where: { id: driverId }, data: { status: "AVAILABLE" } });
+  });
+
   it("books, assigns and completes the full ride lifecycle with SOS", async () => {
     const locations = {
       pickup: { address: "Broad Street, Monrovia", latitude: 6.3156, longitude: -10.8074 },
@@ -86,6 +105,11 @@ describe.sequential("end-to-end acceptance", () => {
     rideId = booked.body.data.id;
     await request(app).post(`/api/v1/dispatch/rides/${rideId}/assign`).set("authorization", `Bearer ${adminToken}`).send({ driverId }).expect(200);
     await request(app).post(`/api/v1/drivers/rides/${rideId}/accept`).set("authorization", `Bearer ${driverToken}`).expect(200);
+    const driverUserId = (await prisma.driver.findUniqueOrThrow({ where: { id: driverId }, select: { userId: true } })).userId;
+    const liveLocation = await updateDriverLocation(driverUserId, 6.3138, -10.8042);
+    expect(liveLocation.driverId).toBe(driverId);
+    const tracking = await request(app).get(`/api/v1/rides/${rideId}/tracking`).set("authorization", `Bearer ${passengerToken}`).expect(200);
+    expect(tracking.body.data).toMatchObject({ rideId, status: "DRIVER_ARRIVING", current: { latitude: 6.3138, longitude: -10.8042 } });
     await request(app).post(`/api/v1/rides/${rideId}/transitions`).set("authorization", `Bearer ${driverToken}`).send({ status: "DRIVER_ARRIVED" }).expect(200);
     await request(app).post(`/api/v1/rides/${rideId}/transitions`).set("authorization", `Bearer ${passengerToken}`).send({ status: "PASSENGER_BOARDED" }).expect(200);
     await request(app).post(`/api/v1/rides/${rideId}/sos`).set("authorization", `Bearer ${passengerToken}`).send({ category: "SECURITY", latitude: 6.31, longitude: -10.8 }).expect(201);
@@ -114,7 +138,7 @@ describe.sequential("end-to-end acceptance", () => {
   });
 
   it("allows only the assigned driver to decline an available offer", async () => {
-    const declinedRide = await prisma.ride.create({ data: { passengerId, driverId, idempotencyKey: `decline-${suffix}`, status: "DRIVER_ASSIGNED", pickupAddress: "Broad Street", pickupLatitude: 6.3156, pickupLongitude: -10.8074, destinationAddress: "Congo Town", destinationLatitude: 6.2900, destinationLongitude: -10.7700, estimatedDistanceM: 4_000, estimatedDurationSec: 900, fareMinor: 1_500, driverEarningsMinor: 1_320, companyCommissionMinor: 180, paymentMethod: "CASH" } });
+    const declinedRide = await prisma.ride.create({ data: { passengerId, driverId, idempotencyKey: `decline-${suffix}`, status: "DRIVER_ASSIGNED", pickupAddress: "Broad Street", pickupLatitude: 6.3156, pickupLongitude: -10.8074, destinationAddress: "Congo Town", destinationLatitude: 6.2900, destinationLongitude: -10.7700, estimatedDistanceM: 4_000, estimatedDurationSec: 900, fareMinor: 1_500, driverEarningsMinor: 1_290, companyCommissionMinor: 210, paymentMethod: "CASH" } });
     await prisma.driver.update({ where: { id: driverId }, data: { status: "ON_TRIP" } });
     await prisma.rideOffer.create({ data: { rideId: declinedRide.id, driverId } });
     await request(app).post(`/api/v1/drivers/rides/${declinedRide.id}/reject`).set("authorization", `Bearer ${passengerToken}`).send({ reason: "UNAVAILABLE" }).expect(403);
@@ -123,10 +147,25 @@ describe.sequential("end-to-end acceptance", () => {
     expect((await prisma.ride.findUniqueOrThrow({ where: { id: declinedRide.id } })).driverId).not.toBe(driverId);
   });
 
+  it("purges only expired route points from terminal rides", async () => {
+    const now = new Date("2026-08-08T12:00:00.000Z");
+    const terminalRide = await prisma.ride.create({ data: { passengerId, idempotencyKey: `retention-terminal-${suffix}`, status: "COMPLETED", pickupAddress: "A", pickupLatitude: 6.3, pickupLongitude: -10.8, destinationAddress: "B", destinationLatitude: 6.31, destinationLongitude: -10.79, estimatedDistanceM: 1000, estimatedDurationSec: 300, fareMinor: 1000, driverEarningsMinor: 860, companyCommissionMinor: 140, paymentMethod: "CASH", completedAt: now } });
+    const activeRide = await prisma.ride.create({ data: { passengerId, idempotencyKey: `retention-active-${suffix}`, status: "SEARCHING", pickupAddress: "A", pickupLatitude: 6.3, pickupLongitude: -10.8, destinationAddress: "B", destinationLatitude: 6.31, destinationLongitude: -10.79, estimatedDistanceM: 1000, estimatedDurationSec: 300, fareMinor: 1000, driverEarningsMinor: 860, companyCommissionMinor: 140, paymentMethod: "CASH" } });
+    const [expired, recent, activeOld] = await Promise.all([
+      prisma.routePoint.create({ data: { rideId: terminalRide.id, latitude: 6.3, longitude: -10.8, recordedAt: new Date("2026-07-01T00:00:00.000Z") } }),
+      prisma.routePoint.create({ data: { rideId: terminalRide.id, latitude: 6.31, longitude: -10.79, recordedAt: new Date("2026-08-01T00:00:00.000Z") } }),
+      prisma.routePoint.create({ data: { rideId: activeRide.id, latitude: 6.3, longitude: -10.8, recordedAt: new Date("2026-07-01T00:00:00.000Z") } })
+    ]);
+
+    await expect(purgeExpiredRoutePoints(30, now)).resolves.toMatchObject({ deleted: 1 });
+    expect(await prisma.routePoint.findMany({ where: { id: { in: [expired.id, recent.id, activeOld.id] } }, orderBy: { id: "asc" } })).toHaveLength(2);
+    expect(await prisma.routePoint.count({ where: { id: activeOld.id } })).toBe(1);
+  });
+
   it("protects cancellation, refunds and manual Mobile Money confirmation from replay", async () => {
-    const cancelled = await prisma.ride.create({ data: { passengerId, idempotencyKey: `cancel-${suffix}`, status: "SEARCHING", pickupAddress: "A", pickupLatitude: 6.3, pickupLongitude: -10.8, destinationAddress: "B", destinationLatitude: 6.31, destinationLongitude: -10.79, estimatedDistanceM: 1000, estimatedDurationSec: 300, fareMinor: 1000, driverEarningsMinor: 880, companyCommissionMinor: 120, paymentMethod: "MTN_MOMO" } });
+    const cancelled = await prisma.ride.create({ data: { passengerId, idempotencyKey: `cancel-${suffix}`, status: "SEARCHING", pickupAddress: "A", pickupLatitude: 6.3, pickupLongitude: -10.8, destinationAddress: "B", destinationLatitude: 6.31, destinationLongitude: -10.79, estimatedDistanceM: 1000, estimatedDurationSec: 300, fareMinor: 1000, driverEarningsMinor: 860, companyCommissionMinor: 140, paymentMethod: "MTN_MOMO" } });
     await request(app).post(`/api/v1/rides/${cancelled.id}/transitions`).set("authorization", `Bearer ${passengerToken}`).send({ status: "CANCELLED", cancellationReason: "Plans changed" }).expect(200);
-    const paidRide = await prisma.ride.create({ data: { passengerId, idempotencyKey: `paid-${suffix}`, status: "CANCELLED", pickupAddress: "A", pickupLatitude: 6.3, pickupLongitude: -10.8, destinationAddress: "B", destinationLatitude: 6.31, destinationLongitude: -10.79, estimatedDistanceM: 1000, estimatedDurationSec: 300, fareMinor: 1000, driverEarningsMinor: 880, companyCommissionMinor: 120, paymentMethod: "MTN_MOMO" } });
+    const paidRide = await prisma.ride.create({ data: { passengerId, idempotencyKey: `paid-${suffix}`, status: "CANCELLED", pickupAddress: "A", pickupLatitude: 6.3, pickupLongitude: -10.8, destinationAddress: "B", destinationLatitude: 6.31, destinationLongitude: -10.79, estimatedDistanceM: 1000, estimatedDurationSec: 300, fareMinor: 1000, driverEarningsMinor: 860, companyCommissionMinor: 140, paymentMethod: "MTN_MOMO" } });
     const payment = await prisma.payment.create({ data: { rideId: paidRide.id, provider: "MANUAL", idempotencyKey: `payment-${suffix}`, amountMinor: 1000, method: "MTN_MOMO", status: "PENDING" } });
     const confirmationKey = `confirm-${suffix}`;
     const confirmation = () => request(app).post(`/api/v1/payments/${payment.id}/confirm-mobile-money`).set("authorization", `Bearer ${adminToken}`).set("idempotency-key", confirmationKey).send({ providerReference: `provider-${suffix}`, evidenceReference: `evidence-${suffix}` });

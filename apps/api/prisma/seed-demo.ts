@@ -30,7 +30,13 @@ async function upsertUser(phone: string, email: string, firstName: string, lastN
     update: { email, firstName, lastName, role, status: "ACTIVE", emailVerifiedAt: now, passwordHash, locale: "en" },
     create: { phone, email, firstName, lastName, role, status: "ACTIVE", emailVerifiedAt: now, passwordHash, locale: "en", referralCode: `DEMO-${role}-${phone.slice(-4)}` },
   });
-  await prisma.wallet.upsert({ where: { userId: user.id }, update: {}, create: { userId: user.id, balanceMinor: role === "DRIVER" ? 286_400 : 75_000, currency: "LRD" } });
+  const balanceMinor = role === "DRIVER" ? 286_400 : 75_000;
+  const wallet = await prisma.wallet.upsert({ where: { userId: user.id }, update: { balanceMinor, currency: "LRD" }, create: { userId: user.id, balanceMinor, currency: "LRD" } });
+  await prisma.walletTransaction.upsert({
+    where: { reference: `demo-opening-${user.id}` },
+    update: { amountMinor: balanceMinor, balanceMinor, createdAt: now },
+    create: { walletId: wallet.id, type: "ADJUSTMENT", amountMinor: balanceMinor, balanceMinor, reference: `demo-opening-${user.id}`, idempotencyKey: `demo-opening-${user.id}`, description: "Fictional opening balance for local demonstration", metadata: { demo: true }, createdAt: now },
+  });
   return user;
 }
 
@@ -120,7 +126,7 @@ for (let index = 0; index < 48; index++) {
   const requestedAt = new Date(now.getTime()-(index%28)*day-(index%12)*3_600_000);
   const ride = await prisma.ride.upsert({
     where: { passengerId_idempotencyKey: { passengerId: passengers[index%passengers.length].id, idempotencyKey: `demo-ride-${String(index).padStart(3,"0")}` } },
-    update: { status },
+    update: { status, baseFareMinor: fareMinor, fareMinor, driverEarningsMinor, companyCommissionMinor },
     create: {
       passengerId: passengers[index%passengers.length].id, driverId: drivers[index%drivers.length].id, status,
       pickupAddress: pickup[0], pickupLatitude: pickup[1], pickupLongitude: pickup[2],
@@ -141,6 +147,9 @@ for (let index = 0; index < 48; index++) {
   });
   rides.push(ride);
 }
+
+// Repair the legacy fictional demo ride created by earlier seed versions.
+await prisma.ride.updateMany({ where: { idempotencyKey: "demo-completed-001", fareMinor: 150_000 }, data: { companyCommissionMinor: 21_000, driverEarningsMinor: 129_000 } });
 
 for (let index = 0; index < 12; index++) {
   const ride = rides[index];
