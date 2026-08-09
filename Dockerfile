@@ -25,4 +25,4 @@ COPY --from=build --chown=app:app /app/apps/api/package.json ./apps/api/package.
 COPY --chown=app:app docs/openapi.yaml ./docs/openapi.yaml
 USER app
 EXPOSE 4000
-CMD CMD ["sh", "-c", "node apps/api/node_modules/prisma/build/index.js migrate deploy --schema apps/api/prisma/schema.prisma && exec node apps/api/dist/server.js"]
+CMD ["sh", "-c", "node apps/api/node_modules/prisma/build/index.js migrate deploy --schema apps/api/prisma/schema.prisma && exec node apps/api/dist/server.js"]
