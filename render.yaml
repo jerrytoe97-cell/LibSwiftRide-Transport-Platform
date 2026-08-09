@@ -31,6 +31,10 @@ services:
       - key: CORS_ORIGINS
         sync: false
       - key: ROUTING_API_URL
+        value: https://api.mapbox.com/directions/v5/mapbox/driving
+      - key: ROUTING_PROVIDER
+        value: mapbox
+      - key: MAPBOX_ROUTING_TOKEN
         sync: false
       - key: ROUTE_POINT_RETENTION_DAYS
         value: "30"

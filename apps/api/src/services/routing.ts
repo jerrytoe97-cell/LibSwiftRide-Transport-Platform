@@ -28,6 +28,18 @@ const routeResponse = z.object({
   })).default([])
 });
 
+export function buildRoutingUrl(
+  coordinates: string,
+  settings: { provider: "osrm" | "mapbox"; apiUrl: string; mapboxToken?: string }
+) {
+  const baseUrl = settings.apiUrl.replace(/\/$/, "");
+  if (settings.provider === "mapbox") {
+    if (!settings.mapboxToken) throw new RoutingError("ROUTING_NETWORK_FAILURE", "Routing service is not configured");
+    return `${baseUrl}/${coordinates}?alternatives=false&steps=false&geometries=geojson&overview=full&access_token=${encodeURIComponent(settings.mapboxToken)}`;
+  }
+  return `${baseUrl}/route/v1/driving/${coordinates}?alternatives=false&steps=false&geometries=geojson&overview=full`;
+}
+
 export async function calculateRoadRoute(
   pickup: RouteLocation,
   destination: RouteLocation,
@@ -42,7 +54,11 @@ export async function calculateRoadRoute(
   }
 
   const coordinates = `${pickup.longitude},${pickup.latitude};${destination.longitude},${destination.latitude}`;
-  const url = `${config.ROUTING_API_URL.replace(/\/$/, "")}/route/v1/driving/${coordinates}?alternatives=false&steps=false&geometries=geojson&overview=full`;
+  const url = buildRoutingUrl(coordinates, {
+    provider: config.ROUTING_PROVIDER,
+    apiUrl: config.ROUTING_API_URL,
+    ...(config.MAPBOX_ROUTING_TOKEN ? { mapboxToken: config.MAPBOX_ROUTING_TOKEN } : {})
+  });
   let response: Response;
   try {
     response = await fetchRoute(url, { headers: { accept: "application/json", "user-agent": "LibSwiftRide/0.1 routing" }, timeoutMs: config.ROUTING_TIMEOUT_MS, attempts: 2 });

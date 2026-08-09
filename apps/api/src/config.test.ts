@@ -21,6 +21,20 @@ describe("production environment safeguards", () => {
     expect(parseEnvironment(production)).toMatchObject({ NODE_ENV: "production", PAYMENTS_ENABLED: false });
   });
 
+  it("accepts Mapbox routing only with a server-side token", () => {
+    expect(parseEnvironment({
+      ...production,
+      ROUTING_PROVIDER: "mapbox",
+      ROUTING_API_URL: "https://api.mapbox.com/directions/v5/mapbox/driving",
+      MAPBOX_ROUTING_TOKEN: "mapbox-routing-token-value"
+    })).toMatchObject({ ROUTING_PROVIDER: "mapbox" });
+    expect(() => parseEnvironment({
+      ...production,
+      ROUTING_PROVIDER: "mapbox",
+      ROUTING_API_URL: "https://api.mapbox.com/directions/v5/mapbox/driving"
+    })).toThrow("Invalid environment");
+  });
+
   it.each([
     ["wildcard CORS", { CORS_ORIGINS: "*" }],
     ["non-TLS CORS", { CORS_ORIGINS: "http://passenger.example.com" }],

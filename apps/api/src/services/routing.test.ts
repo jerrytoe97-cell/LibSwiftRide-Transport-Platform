@@ -1,10 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
-import { calculateRoadRoute, RoutingError } from "./routing.js";
+import { buildRoutingUrl, calculateRoadRoute, RoutingError } from "./routing.js";
 
 const pickup = { latitude: 6.3156, longitude: -10.8074 };
 const destination = { latitude: 6.3058, longitude: -10.7492 };
 
 describe("road routing", () => {
+  it("builds provider-specific URLs without changing coordinate order", () => {
+    const coordinates = "-10.8074,6.3156;-10.7492,6.3058";
+    expect(buildRoutingUrl(coordinates, { provider: "osrm", apiUrl: "https://routing.example" }))
+      .toContain(`/route/v1/driving/${coordinates}`);
+    expect(buildRoutingUrl(coordinates, { provider: "mapbox", apiUrl: "https://api.mapbox.com/directions/v5/mapbox/driving", mapboxToken: "token-with-special/value" }))
+      .toBe(`https://api.mapbox.com/directions/v5/mapbox/driving/${coordinates}?alternatives=false&steps=false&geometries=geojson&overview=full&access_token=token-with-special%2Fvalue`);
+  });
+
+  it("rejects an unconfigured Mapbox provider", () => {
+    expect(() => buildRoutingUrl("1,2;3,4", { provider: "mapbox", apiUrl: "https://api.mapbox.com/directions/v5/mapbox/driving" }))
+      .toThrow("Routing service is not configured");
+  });
+
   it("returns provider-authoritative distance, duration and GeoJSON coordinates", async () => {
     const provider = vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: "Ok", routes: [{ distance: 7_432.4, duration: 1_118.7, geometry: { type: "LineString", coordinates: [[-10.8074, 6.3156], [-10.78, 6.31], [-10.7492, 6.3058]] } }] }), { status: 200 }));
     const route = await calculateRoadRoute(pickup, destination, provider);
