@@ -35,7 +35,7 @@ export function buildRoutingUrl(
   const baseUrl = settings.apiUrl.replace(/\/$/, "");
   if (settings.provider === "mapbox") {
     if (!settings.mapboxToken) throw new RoutingError("ROUTING_NETWORK_FAILURE", "Routing service is not configured");
-    return `${baseUrl}/${coordinates}?alternatives=false&steps=false&geometries=geojson&overview=full&access_token=${encodeURIComponent(settings.mapboxToken)}`;
+    return `${baseUrl}/${coordinates}?alternatives=false&steps=false&geometries=geojson&overview=full&radiuses=unlimited;unlimited&access_token=${encodeURIComponent(settings.mapboxToken)}`;
   }
   return `${baseUrl}/route/v1/driving/${coordinates}?alternatives=false&steps=false&geometries=geojson&overview=full`;
 }

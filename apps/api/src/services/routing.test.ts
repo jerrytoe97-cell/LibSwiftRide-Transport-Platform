@@ -10,7 +10,7 @@ describe("road routing", () => {
     expect(buildRoutingUrl(coordinates, { provider: "osrm", apiUrl: "https://routing.example" }))
       .toContain(`/route/v1/driving/${coordinates}`);
     expect(buildRoutingUrl(coordinates, { provider: "mapbox", apiUrl: "https://api.mapbox.com/directions/v5/mapbox/driving", mapboxToken: "token-with-special/value" }))
-      .toBe(`https://api.mapbox.com/directions/v5/mapbox/driving/${coordinates}?alternatives=false&steps=false&geometries=geojson&overview=full&access_token=token-with-special%2Fvalue`);
+      .toBe(`https://api.mapbox.com/directions/v5/mapbox/driving/${coordinates}?alternatives=false&steps=false&geometries=geojson&overview=full&radiuses=unlimited;unlimited&access_token=token-with-special%2Fvalue`);
   });
 
   it("rejects an unconfigured Mapbox provider", () => {

@@ -317,8 +317,11 @@ type MapController = {
   isStyleLoaded: () => boolean;
   once: (type: "load", listener: () => void) => unknown;
   getSource: (id: string) => unknown;
+  getLayer: (id: string) => unknown;
   addSource: (id: string, source: { type: "geojson"; data: object }) => unknown;
   addLayer: (layer: object) => unknown;
+  removeLayer: (id: string) => unknown;
+  removeSource: (id: string) => unknown;
   remove: () => void;
 };
 type MapMarker = { remove: () => void };
@@ -396,11 +399,11 @@ export function Map({ latitude = 6.3156, longitude = -10.8074, label = "Monrovia
           return marker.addTo(currentMap as unknown as import("maplibre-gl").Map);
         });
       }
-      if (pickup && destination) {
+      if (pickup && destination && route.length >= 2) {
         const routeData = {
           type: "Feature",
           properties: {},
-          geometry: { type: "LineString", coordinates: route.length >= 2 ? route : [[pickup.longitude, pickup.latitude], [destination.longitude, destination.latitude]] }
+          geometry: { type: "LineString", coordinates: route }
         };
         const drawRoute = () => {
           if (cancelled) return;
@@ -413,6 +416,9 @@ export function Map({ latitude = 6.3156, longitude = -10.8074, label = "Monrovia
         };
         if (currentMap.isStyleLoaded()) drawRoute();
         else currentMap.once("load", drawRoute);
+      } else if (currentMap.isStyleLoaded()) {
+        if (currentMap.getLayer("trip-route-line")) currentMap.removeLayer("trip-route-line");
+        if (currentMap.getSource("trip-route")) currentMap.removeSource("trip-route");
       }
       if (points.length > 1) {
         const longitudes = points.map((point) => point.longitude);

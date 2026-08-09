@@ -57,7 +57,7 @@ type RideOption = "ECONOMY" | "PREMIUM" | "BUSINESS";
 type SosCategory = "MEDICAL" | "SECURITY" | "CRASH" | "HARASSMENT" | "OTHER";
 const defaultLocations = {
   pickup: { address: "Broad Street, Monrovia", latitude: 6.3156, longitude: -10.8074 },
-  destination: { address: "Samuel K. Doe Sports Complex", latitude: 6.3058, longitude: -10.7492 }
+  destination: { address: "Samuel K. Doe Sports Complex, Paynesville", latitude: 6.25694, longitude: -10.70213 }
 };
 
 function App() {
@@ -423,7 +423,7 @@ function App() {
         <div><span className="promo-kicker">{passengerMessage(locale, "limitedOffer")}</span><strong>{featuredPromotion.percentageOff ? `${featuredPromotion.percentageOff}% ${passengerMessage(locale, "offRide")}` : `${money(featuredPromotion.amountOffMinor ?? 0)} ${passengerMessage(locale, "offRide")}`}</strong><small>{featuredPromotion.description} · {passengerMessage(locale, "expires")} {new Date(featuredPromotion.expiresAt).toLocaleDateString(locale === "fr" ? "fr-FR" : "en-LR")}</small></div>
         <button type="button" onClick={() => { setPromo(featuredPromotion.code); setQuote(null); }}>{promo === featuredPromotion.code ? passengerMessage(locale, "applied") : `${passengerMessage(locale, "apply")} ${featuredPromotion.code}`}</button>
       </section>}
-      <section className="hero">
+      <section className="hero passenger-booking">
         <div className="panel form">
           <label>{translatedMessage(locale, "pickup")}<input value={pickup.address} onChange={(event) => { setPickup({ ...pickup, address: event.target.value }); setQuote(null); }} /></label>
           <button className="link-button" type="button" disabled={locating} onClick={useCurrentPickup}>{passengerMessage(locale, locating ? "findingLocation" : "useGps")}</button>
