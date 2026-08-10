@@ -31,4 +31,19 @@ describe("SDK", () => {
     const request = new LibSwiftRideClient().request("/rides/quote");
     await expect(request).rejects.toMatchObject({ code: "NETWORK_FAILURE", name: ApiRequestError.name });
   });
+  it("reports non-JSON gateway responses without exposing browser parsing errors", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("Not found", { status: 404 })));
+    await expect(new LibSwiftRideClient().request("/auth/register")).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+      status: 404,
+      message: "LibSwiftRide returned an invalid server response. Please try again."
+    });
+  });
+  it("keeps empty error responses actionable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 502 })));
+    await expect(new LibSwiftRideClient().request("/auth/register")).rejects.toMatchObject({
+      code: "REQUEST_FAILED",
+      status: 502
+    });
+  });
 });

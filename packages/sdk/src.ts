@@ -114,7 +114,21 @@ export class LibSwiftRideClient {
       headers.set("authorization", `Bearer ${this.accessToken}`);
       response = await fetch(`${API_URL}${path}`, { ...requestInit, headers });
     }
-    const body = response.status === 204 ? undefined : await response.json();
+    let body: unknown;
+    if (response.status !== 204) {
+      const responseText = await response.text();
+      if (responseText) {
+        try {
+          body = JSON.parse(responseText) as unknown;
+        } catch {
+          throw new ApiRequestError(
+            "INVALID_RESPONSE",
+            "LibSwiftRide returned an invalid server response. Please try again.",
+            response.status
+          );
+        }
+      }
+    }
     if (!response.ok) {
       const apiError = (body as ApiError | undefined)?.error;
       throw new ApiRequestError(apiError?.code ?? "REQUEST_FAILED", apiError?.message ?? `Request failed (${response.status})`, response.status);

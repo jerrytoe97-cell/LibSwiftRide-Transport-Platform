@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { pinoHttp } from "pino-http";
 import { collectDefaultMetrics, Counter, Histogram, register } from "prom-client";
 import { WebSocketServer } from "ws";
+import { Prisma } from "@prisma/client";
 import { ZodError } from "zod";
 import { api } from "./routes.js";
 import { verifyAccessToken } from "./auth.js";
@@ -80,6 +81,14 @@ app.use((_req, res) => res.status(404).json({ error: { code: "NOT_FOUND", messag
 app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
   req.log.error({ err: error }, "request failed");
   if (error instanceof ZodError) return res.status(422).json({ error: { code: "VALIDATION_ERROR", message: "Request validation failed", details: error.issues } });
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+    return res.status(409).json({
+      error: {
+        code: "ACCOUNT_EXISTS",
+        message: "An account already exists with this phone number or email address. Sign in instead."
+      }
+    });
+  }
   res.status(500).json({ error: { code: "INTERNAL_ERROR", message: "An unexpected error occurred" } });
 });
 
