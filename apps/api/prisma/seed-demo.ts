@@ -21,7 +21,7 @@ const locations = [
   ["ELWA Junction, Paynesville",6.2647,-10.7031],["Broad Street, Monrovia",6.3156,-10.8074],
   ["Red Light Market, Paynesville",6.2901,-10.7057],["Tubman Boulevard, Sinkor",6.2871,-10.7739],
   ["Spriggs Payne Airport",6.2891,-10.7587],["Duala Market",6.3630,-10.7950],
-  ["SKD Sports Complex",6.3058,-10.7492],["Mamba Point, Monrovia",6.3264,-10.8060],
+  ["SKD Sports Complex, Paynesville",6.25694,-10.70213],["Mamba Point, Monrovia",6.3264,-10.8060],
 ] as const;
 
 async function upsertUser(phone: string, email: string, firstName: string, lastName: string, role: UserRole) {

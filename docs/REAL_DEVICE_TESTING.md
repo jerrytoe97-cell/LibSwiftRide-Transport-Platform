@@ -11,6 +11,7 @@ Test foreground location allowed; permission denied and restored; driver backgro
 ## Complete passenger-to-driver journey
 
 1. Confirm API readiness and that external payments are disabled.
+   Use the hosted staging links and record the immutable Git commit. Confirm the passenger address search returns Greater Monrovia suggestions, selecting a result moves its map marker, and the quoted road route joins the selected coordinates rather than the typed text alone.
 2. Register a fictional passenger, verify email through the staging adapter and sign in.
 3. Register a fictional driver, submit non-real KYC test references, approve through staging admin and attach a fictional vehicle.
 4. Set the driver available and verify understandable allowed/denied location behavior.

@@ -53,12 +53,114 @@ type Receipt = {
 };
 
 type Location = { address: string; latitude: number; longitude: number };
+type PlaceSuggestion = { mapbox_id: string; name: string; place_formatted?: string; full_address?: string; coordinates?: [number, number] };
 type RideOption = "ECONOMY" | "PREMIUM" | "BUSINESS";
 type SosCategory = "MEDICAL" | "SECURITY" | "CRASH" | "HARASSMENT" | "OTHER";
 const defaultLocations = {
   pickup: { address: "Broad Street, Monrovia", latitude: 6.3156, longitude: -10.8074 },
   destination: { address: "Samuel K. Doe Sports Complex, Paynesville", latitude: 6.25694, longitude: -10.70213 }
 };
+
+const mapboxSearchToken = (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_MAPBOX_ACCESS_TOKEN?.trim();
+const greaterMonroviaPlaces: PlaceSuggestion[] = [
+  { mapbox_id: "local:broad-street", name: "Broad Street", place_formatted: "Monrovia, Liberia", coordinates: [-10.8074, 6.3156] },
+  { mapbox_id: "local:skd", name: "Samuel K. Doe Sports Complex", place_formatted: "Paynesville, Liberia", coordinates: [-10.70213, 6.25694] },
+  { mapbox_id: "local:elwa", name: "ELWA Junction", place_formatted: "Paynesville, Liberia", coordinates: [-10.7031, 6.2647] },
+  { mapbox_id: "local:red-light", name: "Red Light Market", place_formatted: "Paynesville, Liberia", coordinates: [-10.7057, 6.2901] },
+  { mapbox_id: "local:tubman-boulevard", name: "Tubman Boulevard", place_formatted: "Sinkor, Monrovia, Liberia", coordinates: [-10.7739, 6.2871] },
+  { mapbox_id: "local:spriggs-payne", name: "Spriggs Payne Airport", place_formatted: "Sinkor, Monrovia, Liberia", coordinates: [-10.7587, 6.2891] },
+  { mapbox_id: "local:duala", name: "Duala Market", place_formatted: "Monrovia, Liberia", coordinates: [-10.795, 6.363] },
+  { mapbox_id: "local:mamba-point", name: "Mamba Point", place_formatted: "Monrovia, Liberia", coordinates: [-10.806, 6.3264] }
+];
+
+function PlaceSearchField({ label, value, onChange }: { label: string; value: Location; onChange: (location: Location) => void }) {
+  const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState("");
+  const sessionToken = useRef(crypto.randomUUID());
+
+  useEffect(() => {
+    const query = value.address.trim();
+    if (query.length < 3 || Number.isFinite(value.latitude)) {
+      setSuggestions([]);
+      setSearching(false);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      const normalizedQuery = query.toLocaleLowerCase();
+      const localSuggestions = greaterMonroviaPlaces.filter((place) => `${place.name} ${place.place_formatted ?? ""}`.toLocaleLowerCase().includes(normalizedQuery));
+      setSuggestions(localSuggestions);
+      if (!mapboxSearchToken) { setSearching(false); return; }
+      setSearching(true);
+      setSearchError("");
+      try {
+        const parameters = new URLSearchParams({
+          q: query,
+          access_token: mapboxSearchToken,
+          session_token: sessionToken.current,
+          country: "LR",
+          language: "en",
+          limit: "6",
+          proximity: "-10.78,6.30",
+          bbox: "-10.95,6.18,-10.55,6.55"
+        });
+        const response = await fetch(`https://api.mapbox.com/search/searchbox/v1/suggest?${parameters}`, { signal: controller.signal });
+        if (!response.ok) throw new Error("Search unavailable");
+        const result = await response.json() as { suggestions?: PlaceSuggestion[] };
+        const remoteSuggestions = result.suggestions ?? [];
+        setSuggestions([...localSuggestions, ...remoteSuggestions.filter((remote) => !localSuggestions.some((local) => local.name.toLocaleLowerCase() === remote.name.toLocaleLowerCase()))].slice(0, 6));
+      } catch (error) {
+        if ((error as Error).name !== "AbortError" && localSuggestions.length === 0) setSearchError("Location search is temporarily unavailable.");
+      } finally {
+        if (!controller.signal.aborted) setSearching(false);
+      }
+    }, 350);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [value.address, value.latitude]);
+
+  async function selectSuggestion(suggestion: PlaceSuggestion) {
+    if (suggestion.coordinates) {
+      onChange({ address: [suggestion.name, suggestion.place_formatted].filter(Boolean).join(", "), longitude: suggestion.coordinates[0], latitude: suggestion.coordinates[1] });
+      setSuggestions([]);
+      sessionToken.current = crypto.randomUUID();
+      return;
+    }
+    if (!mapboxSearchToken) return;
+    setSearching(true);
+    setSearchError("");
+    try {
+      const parameters = new URLSearchParams({ access_token: mapboxSearchToken, session_token: sessionToken.current, language: "en" });
+      const response = await fetch(`https://api.mapbox.com/search/searchbox/v1/retrieve/${encodeURIComponent(suggestion.mapbox_id)}?${parameters}`);
+      if (!response.ok) throw new Error("Location details unavailable");
+      const result = await response.json() as { features?: Array<{ geometry?: { coordinates?: [number, number] }; properties?: { name?: string; full_address?: string; place_formatted?: string } }> };
+      const feature = result.features?.[0];
+      const coordinates = feature?.geometry?.coordinates;
+      if (!coordinates || !coordinates.every(Number.isFinite)) throw new Error("Location has no coordinates");
+      const properties = feature?.properties;
+      const address = properties?.full_address ?? [properties?.name ?? suggestion.name, properties?.place_formatted ?? suggestion.place_formatted].filter(Boolean).join(", ");
+      onChange({ address, longitude: coordinates[0], latitude: coordinates[1] });
+      setSuggestions([]);
+      sessionToken.current = crypto.randomUUID();
+    } catch {
+      setSearchError("That location could not be selected. Try another result.");
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  return <div className="place-search">
+    <label>{label}<input value={value.address} autoComplete="off" aria-autocomplete="list" aria-expanded={suggestions.length > 0} onChange={(event) => onChange({ address: event.target.value, latitude: Number.NaN, longitude: Number.NaN })} /></label>
+    {searching && <small role="status">Searching Greater Monrovia…</small>}
+    {searchError && <small className="place-search-error" role="alert">{searchError}</small>}
+    {suggestions.length > 0 && <div className="place-suggestions" role="listbox" aria-label={`${label} suggestions`}>
+      {suggestions.map((suggestion) => <button type="button" role="option" aria-selected="false" key={suggestion.mapbox_id} onClick={() => void selectSuggestion(suggestion)}>
+        <strong>{suggestion.name}</strong><small>{suggestion.place_formatted ?? suggestion.full_address ?? "Liberia"}</small>
+      </button>)}
+    </div>}
+    {!mapboxSearchToken && <small>Address search is not configured. Use a saved place or GPS pickup.</small>}
+  </div>;
+}
 
 function App() {
   const [quote, setQuote] = useState<Quote | null>(null);
@@ -425,9 +527,9 @@ function App() {
       </section>}
       <section className="hero passenger-booking">
         <div className="panel form">
-          <label>{translatedMessage(locale, "pickup")}<input value={pickup.address} onChange={(event) => { setPickup({ ...pickup, address: event.target.value }); setQuote(null); }} /></label>
+          <PlaceSearchField label={translatedMessage(locale, "pickup")} value={pickup} onChange={(location) => { setPickup(location); setQuote(null); setMessage(""); }} />
           <button className="link-button" type="button" disabled={locating} onClick={useCurrentPickup}>{passengerMessage(locale, locating ? "findingLocation" : "useGps")}</button>
-          <label>{translatedMessage(locale, "destination")}<input value={destination.address} onChange={(event) => { setDestination({ ...destination, address: event.target.value }); setQuote(null); }} /></label>
+          <PlaceSearchField label={translatedMessage(locale, "destination")} value={destination} onChange={(location) => { setDestination(location); setQuote(null); setMessage(""); }} />
           {favourites.length > 0 && <div className="saved-place-shortcuts" aria-label={passengerMessage(locale, "savedPlaces")}>
             {favourites.slice(0, 4).map((place) => <button key={place.id} type="button" onClick={() => selectFavourite(place, "destination")}>
               <span aria-hidden="true">{place.type === "HOME" ? "⌂" : place.type === "WORK" ? "▣" : "★"}</span>
@@ -484,8 +586,8 @@ function App() {
           )}
         </div>
         <Map
-          pickup={{ ...pickup, label: "Pickup" }}
-          destination={{ ...destination, label: "Destination" }}
+          {...(Number.isFinite(pickup.latitude) && Number.isFinite(pickup.longitude) ? { pickup: { ...pickup, label: "Pickup" } } : {})}
+          {...(Number.isFinite(destination.latitude) && Number.isFinite(destination.longitude) ? { destination: { ...destination, label: "Destination" } } : {})}
           route={quote?.route.geometry ?? []}
           drivers={liveLocation ? [{ ...liveLocation, label: "Your driver" }] : []}
           label={liveLocation ? `Live driver location${etaSeconds ? ` · ETA ${Math.ceil(etaSeconds / 60)} min` : ""}` : "Pickup and destination"}

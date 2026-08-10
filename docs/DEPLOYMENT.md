@@ -22,6 +22,10 @@ Create a staging Blueprint first. Render generates database, Redis and JWT value
 - `ORANGE_MONEY_NUMBER` and `MTN_MOMO_NUMBER` as protected 10-digit local recipient numbers
 - Email/SMS delivery credentials
 
+Privileged staging identities are created only through the audited, create-only procedure in `docs/PRIVILEGED_ACCOUNT_PROVISIONING.md`. Do not use the local demo seed in hosted environments and do not keep provisioning passwords in Render environment values after the one-time command completes.
+
+Mapbox passenger search uses the Search Box suggest/retrieve session flow, restricted to Liberia and biased toward Greater Monrovia. Confirm the web token includes the required public search scope and that the approved Mapbox plan permits the platform's operational handling of selected ride coordinates before production use.
+
 The API pre-deploy command applies checked-in Prisma migrations. Render health checks use `/health/ready`.
 
 ## Mobile Money recipient numbers

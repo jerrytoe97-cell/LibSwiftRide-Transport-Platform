@@ -14,7 +14,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy"
     ,"prisma:seed-demo": "tsx prisma/seed-demo.ts",
-    "recovery:validate": "tsx src/recovery-check.ts"
+    "recovery:validate": "tsx src/recovery-check.ts",
+    "provision:privileged": "tsx src/provision-privileged-accounts.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.12.0",
