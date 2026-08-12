@@ -33,6 +33,10 @@ Use this checklist against one immutable commit on `phase-2-development`. Attach
 | `PUSH_DELIVERY_URL`, `PUSH_DELIVERY_TOKEN` | conditional | Required to exercise push delivery |
 | `METRICS_TOKEN` | production runtime | Generated secret; monitoring sends it as a bearer token |
 | `VITE_API_URL`, `VITE_WS_URL` | each frontend build | HTTPS API `/api/v1` and WSS `/ws` URLs |
+
+`VITE_API_URL` must be the deployed API service URL, never the Passenger, Driver, or other static frontend URL. Before promoting a frontend build, confirm the API origin's `/health/live` endpoint returns JSON and submit one synthetic registration using fictional test data.
+
+For the current hosted staging topology, Cloudflare Passenger and Driver builds must use `https://libswiftride-transport-platform.onrender.com/api/v1` and `wss://libswiftride-transport-platform.onrender.com/ws`. Keep portal navigation URLs consistent with the selected Render or Cloudflare deployment family; do not mix an obsolete hostname into a frontend build.
 | `LOG_LEVEL` | optional | `info` unless incident diagnostics require a temporary change |
 
 Never place real values in `.env.example`, Render Blueprint source, logs or release evidence.

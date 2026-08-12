@@ -48,8 +48,12 @@ describe.sequential("end-to-end acceptance", () => {
     passengerId = registered.body.data.id;
     passengerToken = registered.body.tokens.accessToken;
     await request(app).post("/api/v1/auth/email-verification/request").set("authorization", `Bearer ${passengerToken}`).expect(202);
-    const notification = await prisma.notification.findFirstOrThrow({ where: { userId: passengerId, template: "email-verification" }, orderBy: { createdAt: "desc" } });
+    const firstNotification = await prisma.notification.findFirstOrThrow({ where: { userId: passengerId, template: "email-verification" }, orderBy: { createdAt: "desc" } });
+    const firstToken = firstNotification.body.replace("Verification token: ", "");
+    await request(app).post("/api/v1/auth/email-verification/request").set("authorization", `Bearer ${passengerToken}`).expect(202);
+    const notification = await prisma.notification.findFirstOrThrow({ where: { userId: passengerId, template: "email-verification", id: { not: firstNotification.id } }, orderBy: { createdAt: "desc" } });
     const token = notification.body.replace("Verification token: ", "");
+    await request(app).post("/api/v1/auth/email-verification/confirm").send({ token: firstToken }).expect(400);
     await request(app).post("/api/v1/auth/email-verification/confirm").send({ token }).expect(200);
     expect((await prisma.user.findUniqueOrThrow({ where: { id: passengerId } })).emailVerifiedAt).not.toBeNull();
     const profile = await request(app).get("/api/v1/users/me").set("authorization", `Bearer ${passengerToken}`).expect(200);

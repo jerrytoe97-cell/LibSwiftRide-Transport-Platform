@@ -46,4 +46,10 @@ describe("SDK", () => {
       status: 502
     });
   });
+  it("constructs API request paths without allowing a path to replace the configured API prefix", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { ok: true } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await new LibSwiftRideClient().request("/auth/register");
+    expect(fetchMock).toHaveBeenCalledWith("http://localhost:4000/api/v1/auth/register", expect.any(Object));
+  });
 });

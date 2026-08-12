@@ -13,6 +13,23 @@ export type SessionTokens = { accessToken: string; refreshToken: string };
 const accessTokenKey = "lsr_access_token";
 const refreshTokenKey = "lsr_refresh_token";
 
+function requestUrl(path: string) {
+  try {
+    return new URL(path.replace(/^\/+/, ""), `${API_URL.replace(/\/+$/, "")}/`).href;
+  } catch {
+    throw new ApiRequestError("API_MISCONFIGURED", "LibSwiftRide is not connected to a valid API service. Please contact support.");
+  }
+}
+
+function isFrontendFallback(response: Response) {
+  if (typeof window === "undefined" || response.status !== 404) return false;
+  try {
+    return new URL(response.url).origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
 function storedToken(key: string) {
   if (typeof window === "undefined") return "";
   return window.localStorage.getItem(key) ?? window.sessionStorage.getItem(key) ?? "";
@@ -81,7 +98,7 @@ export class LibSwiftRideClient {
       const refreshToken = storedToken(refreshTokenKey);
       if (!refreshToken) return false;
       try {
-        const response = await fetch(`${API_URL}/auth/refresh`, {
+        const response = await fetch(requestUrl("/auth/refresh"), {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ refreshToken })
@@ -106,14 +123,21 @@ export class LibSwiftRideClient {
     const { skipAuthRefresh, ...requestInit } = init;
     let response: Response;
     try {
-      response = await fetch(`${API_URL}${path}`, { ...requestInit, headers });
-    } catch {
+      response = await fetch(requestUrl(path), { ...requestInit, headers });
+    } catch (error) {
+      if (error instanceof ApiRequestError) throw error;
       throw new ApiRequestError("NETWORK_FAILURE", "Unable to reach LibSwiftRide. Check your connection and try again.");
     }
     if (response.status === 401 && !skipAuthRefresh && await this.refreshSession()) {
       headers.set("authorization", `Bearer ${this.accessToken}`);
-      response = await fetch(`${API_URL}${path}`, { ...requestInit, headers });
+      try {
+        response = await fetch(requestUrl(path), { ...requestInit, headers });
+      } catch (error) {
+        if (error instanceof ApiRequestError) throw error;
+        throw new ApiRequestError("NETWORK_FAILURE", "Unable to reach LibSwiftRide. Check your connection and try again.");
+      }
     }
+    if (isFrontendFallback(response)) throw new ApiRequestError("API_MISCONFIGURED", "This LibSwiftRide site is connected to the frontend instead of the API service. Please contact support.", response.status);
     let body: unknown;
     if (response.status !== 204) {
       const responseText = await response.text();
@@ -139,7 +163,7 @@ export class LibSwiftRideClient {
   async download(path: string) {
     const headers = new Headers();
     if (this.accessToken) headers.set("authorization", `Bearer ${this.accessToken}`);
-    const response = await fetch(`${API_URL}${path}`, { headers });
+    const response = await fetch(requestUrl(path), { headers });
     if (!response.ok) {
       const body = await response.json().catch(() => undefined) as ApiError | undefined;
       throw new Error(body?.error?.message ?? `Download failed (${response.status})`);

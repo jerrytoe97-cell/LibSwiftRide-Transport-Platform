@@ -173,9 +173,16 @@ api.delete("/auth/sessions/:id", authenticate, asyncRoute(async (req, res) => {
 const tokenDigest = (value: string) => createHash("sha256").update(value).digest("hex");
 async function createVerificationToken(userId: string, type: "EMAIL_VERIFY" | "PASSWORD_RESET") {
   const token = randomBytes(32).toString("hex");
-  await prisma.verificationToken.create({
-    data: { userId, type, tokenHash: tokenDigest(token), expiresAt: new Date(Date.now() + (type === "PASSWORD_RESET" ? 3_600_000 : 86_400_000)) }
-  });
+  const issuedAt = new Date();
+  await prisma.$transaction([
+    prisma.verificationToken.updateMany({
+      where: { userId, type, usedAt: null },
+      data: { usedAt: issuedAt }
+    }),
+    prisma.verificationToken.create({
+      data: { userId, type, tokenHash: tokenDigest(token), expiresAt: new Date(issuedAt.getTime() + (type === "PASSWORD_RESET" ? 3_600_000 : 86_400_000)) }
+    })
+  ]);
   return token;
 }
 

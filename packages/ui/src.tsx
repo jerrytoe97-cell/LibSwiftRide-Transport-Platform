@@ -170,9 +170,10 @@ export function Shell({ product, demoRole, children }: { product: string; demoRo
 
 function AuthenticationPanel({ product, role, onAuthenticated, onDemo }: { product: string; role: DemoRole; onAuthenticated: () => void; onDemo?: (() => Promise<void>) | undefined }) {
   const canRegister = role === "PASSENGER" || role === "DRIVER";
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const [mode, setMode] = useState<"login" | "register" | "forgot" | "reset">("login");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -180,6 +181,20 @@ function AuthenticationPanel({ product, role, onAuthenticated, onDemo }: { produ
     setError("");
     const data = new FormData(event.currentTarget);
     try {
+      if (mode === "forgot") {
+        await apiClient.request("/auth/password-reset/request", { method: "POST", body: JSON.stringify({ email: String(data.get("email") ?? "").trim() }), skipAuthRefresh: true });
+        setNotice("If that email belongs to an account, reset instructions have been sent. The link expires in one hour.");
+        setMode("reset");
+        return;
+      }
+      if (mode === "reset") {
+        const password = String(data.get("password") ?? "");
+        if (password !== String(data.get("passwordConfirmation") ?? "")) throw new Error("The new passwords do not match.");
+        await apiClient.request("/auth/password-reset/confirm", { method: "POST", body: JSON.stringify({ token: String(data.get("token") ?? "").trim(), password }), skipAuthRefresh: true });
+        setNotice("Your password has been reset and all previous sessions were signed out. Sign in with your new password.");
+        setMode("login");
+        return;
+      }
       if (mode === "register") {
         const email = String(data.get("email") ?? "");
         await apiClient.register({
@@ -218,9 +233,15 @@ function AuthenticationPanel({ product, role, onAuthenticated, onDemo }: { produ
     }
   }
 
+  const title = mode === "login" ? `Sign in to ${product}` : mode === "register" ? `Create your ${product.toLowerCase()} account` : mode === "forgot" ? "Recover your account" : "Choose a new password";
+  const description = mode === "login" ? "Protected sessions, role-based access and account activity controls are built in." : mode === "forgot" ? "Enter the email on your account. For your privacy, the response is the same whether or not an account exists." : mode === "reset" ? "Paste the reset token from your email and choose a new password. Completing this step signs out every previous session." : role === "PASSENGER" ? "Create your profile, add a trusted emergency contact and prepare your saved places. Phone verification is required before live rides." : "Create your account, then complete driver and vehicle verification before going online.";
   return <section className="auth-shell" aria-labelledby="auth-title">
-    <div className="auth-intro"><span className="eyebrow">Secure account access</span><h1 id="auth-title">{mode === "login" ? `Sign in to ${product}` : `Create your ${product.toLowerCase()} account`}</h1><p>{mode === "login" ? "Protected sessions, role-based access and account activity controls are built in." : role === "PASSENGER" ? "Create your profile, add a trusted emergency contact and prepare your saved places. Phone verification is required before live rides." : "Create your account, then complete driver and vehicle verification before going online."}</p></div>
+    <div className="auth-intro"><span className="eyebrow">Secure account access</span><h1 id="auth-title">{title}</h1><p>{description}</p></div>
     <form className="auth-card" onSubmit={submit}>
+      {notice && <p className="notice" role="status">{notice}</p>}
+      {mode === "forgot" && <label>Email address<input name="email" type="email" autoComplete="email" required /></label>}
+      {mode === "reset" && <><label>Reset token<input name="token" autoComplete="one-time-code" required minLength={32} /></label><label>New password<input name="password" type="password" autoComplete="new-password" required minLength={12} maxLength={128} /></label><label>Confirm new password<input name="passwordConfirmation" type="password" autoComplete="new-password" required minLength={12} maxLength={128} /></label></>}
+      {(mode === "login" || mode === "register") && <>
       {mode === "register" && <div className="form-row"><label>First name<input name="firstName" autoComplete="given-name" required maxLength={80} /></label><label>Last name<input name="lastName" autoComplete="family-name" required maxLength={80} /></label></div>}
       <label>Mobile number<input name="phone" type="tel" autoComplete="tel" required minLength={8} maxLength={20} placeholder="e.g. 0770000000" /></label>
       {mode === "register" && <p className="verification-hint"><strong>Phone verification</strong><span>We will send a one-time code after account creation. Never share this code with a driver or support agent.</span></p>}
@@ -240,11 +261,13 @@ function AuthenticationPanel({ product, role, onAuthenticated, onDemo }: { produ
       </>}
       <label>Password<input name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} required minLength={12} maxLength={128} /></label>
       <label className="check-row"><input name="remember" type="checkbox" defaultChecked /> Keep me signed in on this device</label>
+      </>}
       {error && <p className="notice error" role="alert">{error}</p>}
-      <button className="action" disabled={busy}>{busy ? "Please wait…" : mode === "login" ? "Sign in securely" : "Create account"}</button>
-      {canRegister && <button className="link-button" type="button" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); }}>{mode === "login" ? "New to LibSwiftRide? Create an account" : "Already registered? Sign in"}</button>}
-      {onDemo && <button className="action secondary" type="button" disabled={busy} onClick={() => void onDemo()}>Continue with demo</button>}
-      {mode === "login" && <a className="auth-help" href={`${portalUrls.web}/contact`}>Forgot your password? Contact support</a>}
+      <button className="action" disabled={busy}>{busy ? "Please wait…" : mode === "login" ? "Sign in securely" : mode === "register" ? "Create account" : mode === "forgot" ? "Send reset instructions" : "Reset password"}</button>
+      {canRegister && (mode === "login" || mode === "register") && <button className="link-button" type="button" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); setNotice(""); }}>{mode === "login" ? "New to LibSwiftRide? Create an account" : "Already registered? Sign in"}</button>}
+      {onDemo && mode === "login" && <button className="action secondary" type="button" disabled={busy} onClick={() => void onDemo()}>Continue with demo</button>}
+      {mode === "login" && <button className="link-button auth-help" type="button" onClick={() => { setMode("forgot"); setError(""); setNotice(""); }}>Forgot your password?</button>}
+      {(mode === "forgot" || mode === "reset") && <div className="auth-recovery-actions"><button className="link-button" type="button" onClick={() => { setMode("login"); setError(""); }}>Back to sign in</button>{mode === "forgot" && <button className="link-button" type="button" onClick={() => { setMode("reset"); setError(""); }}>I already have a reset token</button>}</div>}
     </form>
   </section>;
 }
@@ -258,6 +281,8 @@ function AccountPanel({ profile, sessions, error, onClose, onProfile, onSessions
   onSessions: (sessions: Session[]) => void;
   onError: (message: string) => void;
 }) {
+  const [verificationState, setVerificationState] = useState<"idle" | "sending" | "sent" | "confirming">("idle");
+  const [verificationToken, setVerificationToken] = useState("");
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -275,6 +300,28 @@ function AccountPanel({ profile, sessions, error, onClose, onProfile, onSessions
     } catch (requestError) { onError((requestError as Error).message); }
   }
 
+  async function requestEmailVerification() {
+    setVerificationState("sending");
+    try {
+      await apiClient.request("/auth/email-verification/request", { method: "POST" });
+      setVerificationState("sent");
+      onError("");
+    } catch (requestError) { setVerificationState("idle"); onError((requestError as Error).message); }
+  }
+
+  async function confirmEmailVerification(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setVerificationState("confirming");
+    try {
+      await apiClient.request("/auth/email-verification/confirm", { method: "POST", body: JSON.stringify({ token: verificationToken.trim() }), skipAuthRefresh: true });
+      const response = await apiClient.request<{ data: Profile }>("/users/me");
+      onProfile(response.data);
+      setVerificationToken("");
+      setVerificationState("idle");
+      onError("");
+    } catch (requestError) { setVerificationState("sent"); onError((requestError as Error).message); }
+  }
+
   return <aside className="account-drawer" aria-label="Account and security settings">
     <div className="toolbar"><div><span className="eyebrow">Account</span><h2>Profile & security</h2></div><button className="link-button" onClick={onClose}>Close</button></div>
     {error && <p className="notice error" role="alert">{error}</p>}
@@ -285,6 +332,7 @@ function AccountPanel({ profile, sessions, error, onClose, onProfile, onSessions
       <p><strong>{profile.phone}</strong><br /><small>{profile.role.replaceAll("_", " ")} · {profile.emailVerifiedAt ? "Email verified" : "Email verification pending"}</small></p>
       <button className="action">Save profile</button>
     </form>}
+    {profile?.email && !profile.emailVerifiedAt && <section className="account-verification" aria-labelledby="email-verification-title"><h3 id="email-verification-title">Verify email</h3><p>Verify {profile.email} to use account recovery and receive security notices.</p><button className="action secondary" type="button" disabled={verificationState === "sending" || verificationState === "confirming"} onClick={() => void requestEmailVerification()}>{verificationState === "sending" ? "Sending…" : verificationState === "sent" || verificationState === "confirming" ? "Send another code" : "Send verification code"}</button>{(verificationState === "sent" || verificationState === "confirming") && <form onSubmit={confirmEmailVerification}><label>Verification token<input value={verificationToken} onChange={(event) => setVerificationToken(event.target.value)} autoComplete="one-time-code" minLength={32} required /></label><button className="action" disabled={verificationState === "confirming"}>{verificationState === "confirming" ? "Verifying…" : "Verify email"}</button></form>}</section>}
     <div className="account-sessions"><h3>Active sessions</h3>{sessions.length ? sessions.map((session) => <div className="mini-row" key={session.id}><span>Signed in {new Date(session.createdAt).toLocaleDateString()}<small>Expires {new Date(session.expiresAt).toLocaleDateString()}</small></span><button className="link-button" onClick={() => revoke(session.id)}>Revoke</button></div>) : <p>No other active sessions.</p>}</div>
     <button className="danger-button" onClick={() => apiClient.logout().finally(() => window.location.reload())}>Sign out of this device</button>
   </aside>;

@@ -63,27 +63,27 @@ services:
     autoDeployTrigger: checksPass
     envVars: &frontendEnv
       - key: VITE_API_URL
-        sync: false
+        value: https://libswiftride-transport-platform.onrender.com/api/v1
       - key: VITE_WS_URL
-        sync: false
+        value: wss://libswiftride-transport-platform.onrender.com/ws
       - key: VITE_MAP_PROVIDER
         sync: false
       - key: VITE_MAPBOX_ACCESS_TOKEN
         sync: false
       - key: VITE_WEB_URL
-        sync: false
+        value: https://libswiftride-web.onrender.com
       - key: VITE_PASSENGER_APP_URL
-        sync: false
+        value: https://libswiftride-passenger.onrender.com
       - key: VITE_DRIVER_APP_URL
-        sync: false
+        value: https://libswiftride-driver.onrender.com
       - key: VITE_FLEET_APP_URL
-        sync: false
+        value: https://libswiftride-fleet.onrender.com
       - key: VITE_ADMIN_APP_URL
-        sync: false
+        value: https://libswiftride-admin.onrender.com
       - key: VITE_DISPATCHER_APP_URL
-        sync: false
+        value: https://libswiftride-dispatcher.onrender.com
       - key: VITE_BUSINESS_APP_URL
-        sync: false
+        value: https://libswiftride-business.onrender.com
     routes: [{ type: rewrite, source: "/*", destination: "/index.html" }]
   - type: web
     name: libswiftride-passenger
