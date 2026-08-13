@@ -29,6 +29,6 @@ Browser smoke coverage does not replace the authenticated role matrix or real-de
 
 ## Hosted automation
 
-`.github/workflows/staging-browser-smoke.yml` runs the complete desktop and mobile suite after a successful `CI` workflow on `phase-2-development`. It can also be started manually with `workflow_dispatch`.
+`.github/workflows/staging-browser-smoke.yml` runs on each push to `phase-2-development`, waits for the matching `CI` workflow to succeed, and then runs the complete desktop and mobile suite. It can also be started manually with `workflow_dispatch`.
 
-The workflow checks out the test suite from the exact revision validated by the triggering CI run, allows the checks-gated Render rollout time to settle, has read-only repository permissions, cancels obsolete runs, and uploads Playwright reports, screenshots and traces for 14 days. It does not receive or submit user credentials.
+The workflow checks out the pushed revision, verifies that the matching commit passed CI, allows the checks-gated Render rollout time to settle, has read-only code and Actions permissions, cancels obsolete runs, and uploads Playwright reports, screenshots and traces for 14 days. It does not receive or submit user credentials.

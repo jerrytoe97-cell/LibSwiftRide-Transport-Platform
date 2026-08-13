@@ -2,13 +2,12 @@ name: Staging browser smoke
 
 on:
   workflow_dispatch:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
+  push:
     branches: [phase-2-development]
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: staging-browser-smoke
@@ -16,11 +15,8 @@ concurrency:
 
 jobs:
   smoke:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       CI: true
       STAGING_WEB_URL: https://libswiftride-web.onrender.com
@@ -34,8 +30,6 @@ jobs:
     steps:
       - name: Check out validated revision
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Install pnpm
         uses: pnpm/action-setup@v4
@@ -54,8 +48,28 @@ jobs:
       - name: Install Chromium
         run: pnpm exec playwright install --with-deps chromium
 
+      - name: Wait for matching CI validation
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in {1..60}; do
+            result="$(gh run list --workflow CI --commit "$GITHUB_SHA" --limit 1 --json status,conclusion --jq '.[0] | [.status, (.conclusion // "")] | @tsv')"
+            status="${result%%$'\t'*}"
+            conclusion="${result#*$'\t'}"
+            if [ "$status" = "completed" ]; then
+              [ "$conclusion" = "success" ] && exit 0
+              echo "Matching CI completed with: $conclusion"
+              exit 1
+            fi
+            echo "Waiting for matching CI (attempt $attempt/60; status: ${status:-not-found})"
+            sleep 20
+          done
+          echo "Matching CI did not complete within 20 minutes"
+          exit 1
+
       - name: Allow checks-gated staging rollout to settle
-        if: github.event_name == 'workflow_run'
+        if: github.event_name == 'push'
         run: sleep 120
 
       - name: Run staging browser smoke suite
