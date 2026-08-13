@@ -18,6 +18,7 @@ import { createReceiptPdf } from "./services/receipt-pdf.js";
 import { referralRewardFor } from "./services/referrals.js";
 import { fraudAction, fraudScore, incentiveQualified, zoneMultiplierFor } from "./services/phase5.js";
 import { calculateRoadRoute, RoutingError } from "./services/routing.js";
+import { decryptMfaSecret, encryptMfaSecret, generateMfaSecret, generateRecoveryCodes, provisioningUri, recoveryCodeHash, requiresMfa, verifyTotp } from "./services/mfa.js";
 
 export const api = Router();
 const asyncRoute = (handler: (req: any, res: any) => Promise<unknown>) =>
@@ -118,6 +119,13 @@ api.post("/auth/login", asyncRoute(async (req, res) => {
   if (!user || user.status !== "ACTIVE" || !(await verifyPassword(user.passwordHash, input.password))) {
     return res.status(401).json({ error: { code: "INVALID_CREDENTIALS", message: "Phone or password is incorrect" } });
   }
+  if (requiresMfa(user.role)) {
+    const credential = await prisma.mfaCredential.findUnique({ where: { userId: user.id }, select: { verifiedAt: true } });
+    const type = credential?.verifiedAt ? "MFA_LOGIN" : "MFA_ENROLL";
+    const challengeToken = await createVerificationToken(user.id, type);
+    if (type === "MFA_LOGIN") return res.json({ data: { id: user.id, role: user.role }, mfaRequired: true, challengeToken });
+    return res.json({ data: { id: user.id, role: user.role }, mfaEnrollmentRequired: true, enrollmentToken: challengeToken });
+  }
   res.json({ data: { id: user.id, role: user.role }, tokens: await issueTokens({ sub: user.id, role: user.role }) });
 }));
 
@@ -155,7 +163,7 @@ api.post("/auth/demo-login", asyncRoute(async (req, res) => {
     return res.status(503).json({ error: { code: "DEMO_ACCOUNT_UNAVAILABLE", message: "Run the demo seed before using one-click login" } });
   }
   await writeAudit({ actorId: user.id, action: "DEMO_LOGIN", entityType: "User", entityId: user.id, ipAddress: req.ip });
-  res.json({ data: { id: user.id, role: user.role, firstName: user.firstName, lastName: user.lastName }, tokens: await issueTokens({ sub: user.id, role: user.role }) });
+  res.json({ data: { id: user.id, role: user.role, firstName: user.firstName, lastName: user.lastName }, tokens: await issueTokens({ sub: user.id, role: user.role, mfa: requiresMfa(user.role) }) });
 }));
 
 api.get("/auth/sessions", authenticate, asyncRoute(async (req, res) => {
@@ -171,7 +179,7 @@ api.delete("/auth/sessions/:id", authenticate, asyncRoute(async (req, res) => {
 }));
 
 const tokenDigest = (value: string) => createHash("sha256").update(value).digest("hex");
-async function createVerificationToken(userId: string, type: "EMAIL_VERIFY" | "PASSWORD_RESET") {
+async function createVerificationToken(userId: string, type: "EMAIL_VERIFY" | "PASSWORD_RESET" | "MFA_LOGIN" | "MFA_ENROLL") {
   const token = randomBytes(32).toString("hex");
   const issuedAt = new Date();
   await prisma.$transaction([
@@ -180,11 +188,98 @@ async function createVerificationToken(userId: string, type: "EMAIL_VERIFY" | "P
       data: { usedAt: issuedAt }
     }),
     prisma.verificationToken.create({
-      data: { userId, type, tokenHash: tokenDigest(token), expiresAt: new Date(issuedAt.getTime() + (type === "PASSWORD_RESET" ? 3_600_000 : 86_400_000)) }
+      data: { userId, type, tokenHash: tokenDigest(token), expiresAt: new Date(issuedAt.getTime() + (type === "PASSWORD_RESET" ? 3_600_000 : type.startsWith("MFA_") ? 300_000 : 86_400_000)) }
     })
   ]);
   return token;
 }
+
+function mfaKey() {
+  if (!config.MFA_ENCRYPTION_KEY) throw Object.assign(new Error("MFA encryption is not configured"), { status: 503, code: "MFA_NOT_CONFIGURED" });
+  return config.MFA_ENCRYPTION_KEY;
+}
+
+async function validMfaToken(token: string, type: "MFA_LOGIN" | "MFA_ENROLL") {
+  const record = await prisma.verificationToken.findUnique({ where: { tokenHash: tokenDigest(token) }, include: { user: true } });
+  return record && record.type === type && !record.usedAt && record.expiresAt >= new Date() && requiresMfa(record.user.role) ? record : null;
+}
+
+api.post("/auth/mfa/enrollment/start", asyncRoute(async (req, res) => {
+  const enrollmentToken = z.object({ enrollmentToken: z.string().min(32) }).parse(req.body).enrollmentToken;
+  const record = await validMfaToken(enrollmentToken, "MFA_ENROLL");
+  if (!record) return res.status(401).json({ error: { code: "INVALID_MFA_ENROLLMENT", message: "MFA enrollment has expired. Sign in again." } });
+  const secret = generateMfaSecret();
+  const recoveryCodes = generateRecoveryCodes();
+  await prisma.mfaCredential.upsert({
+    where: { userId: record.userId },
+    update: { encryptedSecret: encryptMfaSecret(secret, mfaKey()), recoveryCodeHashes: recoveryCodes.map(recoveryCodeHash), verifiedAt: null },
+    create: { userId: record.userId, encryptedSecret: encryptMfaSecret(secret, mfaKey()), recoveryCodeHashes: recoveryCodes.map(recoveryCodeHash) }
+  });
+  await writeAudit({ actorId: record.userId, action: "MFA_ENROLLMENT_STARTED", entityType: "User", entityId: record.userId, ipAddress: req.ip });
+  res.setHeader("cache-control", "no-store");
+  res.json({ data: { secret, provisioningUri: provisioningUri(secret, record.user.email ?? record.user.phone), recoveryCodes } });
+}));
+
+api.post("/auth/mfa/enrollment/confirm", asyncRoute(async (req, res) => {
+  const input = z.object({ enrollmentToken: z.string().min(32), code: z.string().regex(/^\d{6}$/) }).parse(req.body);
+  const record = await validMfaToken(input.enrollmentToken, "MFA_ENROLL");
+  if (!record) return res.status(401).json({ error: { code: "INVALID_MFA_ENROLLMENT", message: "MFA enrollment has expired. Sign in again." } });
+  const credential = await prisma.mfaCredential.findUnique({ where: { userId: record.userId } });
+  if (!credential || !verifyTotp(decryptMfaSecret(credential.encryptedSecret, mfaKey()), input.code)) {
+    return res.status(401).json({ error: { code: "INVALID_MFA_CODE", message: "The authenticator code is incorrect" } });
+  }
+  await prisma.$transaction([
+    prisma.mfaCredential.update({ where: { id: credential.id }, data: { verifiedAt: new Date() } }),
+    prisma.verificationToken.update({ where: { id: record.id }, data: { usedAt: new Date() } }),
+    prisma.refreshToken.updateMany({ where: { userId: record.userId, revokedAt: null }, data: { revokedAt: new Date() } })
+  ]);
+  await writeAudit({ actorId: record.userId, action: "MFA_ENABLED", entityType: "User", entityId: record.userId, ipAddress: req.ip });
+  res.json({ data: { id: record.user.id, role: record.user.role }, tokens: await issueTokens({ sub: record.user.id, role: record.user.role, mfa: true }) });
+}));
+
+api.post("/auth/mfa/challenge", asyncRoute(async (req, res) => {
+  const input = z.object({ challengeToken: z.string().min(32), code: z.string().min(6).max(20) }).parse(req.body);
+  const record = await validMfaToken(input.challengeToken, "MFA_LOGIN");
+  if (!record) return res.status(401).json({ error: { code: "INVALID_MFA_CHALLENGE", message: "MFA challenge has expired. Sign in again." } });
+  const credential = await prisma.mfaCredential.findUniqueOrThrow({ where: { userId: record.userId } });
+  const hashes = z.array(z.string()).parse(credential.recoveryCodeHashes);
+  const submittedRecoveryHash = recoveryCodeHash(input.code);
+  const recoveryIndex = hashes.indexOf(submittedRecoveryHash);
+  const valid = verifyTotp(decryptMfaSecret(credential.encryptedSecret, mfaKey()), input.code) || recoveryIndex >= 0;
+  if (!valid) return res.status(401).json({ error: { code: "INVALID_MFA_CODE", message: "The authenticator or recovery code is incorrect" } });
+  await prisma.$transaction(async (tx) => {
+    await tx.verificationToken.update({ where: { id: record.id }, data: { usedAt: new Date() } });
+    if (recoveryIndex >= 0) {
+      const current = await tx.mfaCredential.findUniqueOrThrow({ where: { id: credential.id } });
+      const currentHashes = z.array(z.string()).parse(current.recoveryCodeHashes);
+      const currentIndex = currentHashes.indexOf(submittedRecoveryHash);
+      if (currentIndex < 0) throw Object.assign(new Error("Recovery code was already used"), { code: "INVALID_MFA_CODE" });
+      await tx.mfaCredential.update({ where: { id: credential.id }, data: { recoveryCodeHashes: currentHashes.filter((_, index) => index !== currentIndex) } });
+    }
+  }, { isolationLevel: "Serializable" });
+  await writeAudit({ actorId: record.userId, action: recoveryIndex >= 0 ? "MFA_RECOVERY_LOGIN" : "MFA_LOGIN", entityType: "User", entityId: record.userId, ipAddress: req.ip });
+  res.json({ data: { id: record.user.id, role: record.user.role }, tokens: await issueTokens({ sub: record.user.id, role: record.user.role, mfa: true }) });
+}));
+
+api.get("/auth/mfa/status", authenticate, asyncRoute(async (req, res) => {
+  const credential = await prisma.mfaCredential.findUnique({ where: { userId: req.user!.sub }, select: { verifiedAt: true, recoveryCodeHashes: true } });
+  const hashes = credential ? z.array(z.string()).parse(credential.recoveryCodeHashes) : [];
+  res.json({ data: { required: requiresMfa(req.user!.role), enabled: Boolean(credential?.verifiedAt), recoveryCodesRemaining: hashes.length } });
+}));
+
+api.post("/auth/mfa/recovery-codes", authenticate, asyncRoute(async (req, res) => {
+  if (!requiresMfa(req.user!.role)) return res.status(403).json({ error: { code: "MFA_NOT_REQUIRED", message: "MFA recovery codes are available only to staff accounts" } });
+  const code = z.object({ code: z.string().regex(/^\d{6}$/) }).parse(req.body).code;
+  const credential = await prisma.mfaCredential.findUnique({ where: { userId: req.user!.sub } });
+  if (!credential?.verifiedAt || !verifyTotp(decryptMfaSecret(credential.encryptedSecret, mfaKey()), code)) {
+    return res.status(401).json({ error: { code: "INVALID_MFA_CODE", message: "The authenticator code is incorrect" } });
+  }
+  const recoveryCodes = generateRecoveryCodes();
+  await prisma.mfaCredential.update({ where: { id: credential.id }, data: { recoveryCodeHashes: recoveryCodes.map(recoveryCodeHash) } });
+  await writeAudit({ actorId: req.user!.sub, action: "MFA_RECOVERY_CODES_ROTATED", entityType: "User", entityId: req.user!.sub, ipAddress: req.ip });
+  res.setHeader("cache-control", "no-store");
+  res.json({ data: { recoveryCodes } });
+}));
 
 api.post("/auth/email-verification/request", authenticate, asyncRoute(async (req, res) => {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: req.user!.sub } });

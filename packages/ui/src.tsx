@@ -18,6 +18,7 @@ type Profile = {
   locale: "en" | "fr";
 };
 type Session = { id: string; createdAt: string; expiresAt: string };
+type MfaStatus = { required: boolean; enabled: boolean; recoveryCodesRemaining: number };
 const environment = (import.meta as ImportMeta & { env?: Record<string, string> }).env;
 const demoEnabled = environment?.VITE_DEMO_MODE === "true";
 const pushConfigured = Boolean(environment?.VITE_WEB_PUSH_PUBLIC_KEY?.trim());
@@ -123,6 +124,7 @@ export function Shell({ product, demoRole, children }: { product: string; demoRo
   const [accountOpen, setAccountOpen] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [mfaStatus, setMfaStatus] = useState<MfaStatus | null>(null);
   const [accountError, setAccountError] = useState("");
   const [pushState, setPushState] = useState<"idle" | "loading" | "enabled" | "error">("idle");
 
@@ -147,10 +149,12 @@ export function Shell({ product, demoRole, children }: { product: string; demoRo
     if (!hasSession || !accountOpen) return;
     Promise.all([
       apiClient.request<{ data: Profile }>("/users/me"),
-      apiClient.request<{ data: Session[] }>("/auth/sessions")
-    ]).then(([profileResponse, sessionResponse]) => {
+      apiClient.request<{ data: Session[] }>("/auth/sessions"),
+      apiClient.request<{ data: MfaStatus }>("/auth/mfa/status")
+    ]).then(([profileResponse, sessionResponse, mfaResponse]) => {
       setProfile(profileResponse.data);
       setSessions(sessionResponse.data);
+      setMfaStatus(mfaResponse.data);
       setAccountError("");
     }).catch((error: Error) => setAccountError(error.message));
   }, [hasSession, accountOpen]);
@@ -204,7 +208,7 @@ export function Shell({ product, demoRole, children }: { product: string; demoRo
       {demoRole && !hasSession
         ? <AuthenticationPanel product={product} role={demoRole} onAuthenticated={() => { setHasSession(true); window.location.reload(); }} onDemo={demoEnabled ? demoLogin : undefined} />
         : children}
-      {accountOpen && hasSession && <AccountPanel profile={profile} sessions={sessions} error={accountError}
+      {accountOpen && hasSession && <AccountPanel profile={profile} sessions={sessions} mfaStatus={mfaStatus} error={accountError}
         onClose={() => setAccountOpen(false)}
         onProfile={(next) => setProfile(next)}
         onSessions={(next) => setSessions(next)}
@@ -216,10 +220,13 @@ export function Shell({ product, demoRole, children }: { product: string; demoRo
 
 function AuthenticationPanel({ product, role, onAuthenticated, onDemo }: { product: string; role: DemoRole; onAuthenticated: () => void; onDemo?: (() => Promise<void>) | undefined }) {
   const canRegister = role === "PASSENGER" || role === "DRIVER";
-  const [mode, setMode] = useState<"login" | "register" | "forgot" | "reset">("login");
+  const [mode, setMode] = useState<"login" | "register" | "forgot" | "reset" | "mfa" | "mfa-enroll">("login");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [mfaToken, setMfaToken] = useState("");
+  const [rememberMfa, setRememberMfa] = useState(true);
+  const [mfaSetup, setMfaSetup] = useState<{ secret: string; provisioningUri: string; recoveryCodes: string[] } | null>(null);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -239,6 +246,22 @@ function AuthenticationPanel({ product, role, onAuthenticated, onDemo }: { produ
         await apiClient.request("/auth/password-reset/confirm", { method: "POST", body: JSON.stringify({ token: String(data.get("token") ?? "").trim(), password }), skipAuthRefresh: true });
         setNotice("Your password has been reset and all previous sessions were signed out. Sign in with your new password.");
         setMode("login");
+        return;
+      }
+      if (mode === "mfa") {
+        await apiClient.completeMfa("/auth/mfa/challenge", { challengeToken: mfaToken, code: String(data.get("code") ?? "").trim() }, rememberMfa);
+        onAuthenticated();
+        return;
+      }
+      if (mode === "mfa-enroll") {
+        if (!mfaSetup) {
+          const setup = await apiClient.request<{ data: { secret: string; provisioningUri: string; recoveryCodes: string[] } }>("/auth/mfa/enrollment/start", { method: "POST", body: JSON.stringify({ enrollmentToken: mfaToken }), skipAuthRefresh: true });
+          setMfaSetup(setup.data);
+          setNotice("Add this account to your authenticator app, save every recovery code, then enter the current six-digit code.");
+          return;
+        }
+        await apiClient.completeMfa("/auth/mfa/enrollment/confirm", { enrollmentToken: mfaToken, code: String(data.get("code") ?? "").trim() }, rememberMfa);
+        onAuthenticated();
         return;
       }
       if (mode === "register") {
@@ -264,7 +287,18 @@ function AuthenticationPanel({ product, role, onAuthenticated, onDemo }: { produ
           });
         }
       } else {
-        await apiClient.login(String(data.get("phone") ?? ""), String(data.get("password") ?? ""), data.get("remember") === "on");
+        const persistent = data.get("remember") === "on";
+        const login = await apiClient.login(String(data.get("phone") ?? ""), String(data.get("password") ?? ""), persistent);
+        if (login.mfaRequired && login.challengeToken) {
+          setMfaToken(login.challengeToken); setRememberMfa(persistent); setMode("mfa");
+          setNotice("Enter the current code from your authenticator app, or use one unused recovery code.");
+          return;
+        }
+        if (login.mfaEnrollmentRequired && login.enrollmentToken) {
+          setMfaToken(login.enrollmentToken); setRememberMfa(persistent); setMfaSetup(null); setMode("mfa-enroll");
+          setNotice("Multi-factor authentication is required for this staff account before portal access.");
+          return;
+        }
       }
       const response = await apiClient.request<{ data: Profile }>("/users/me");
       if (response.data.role !== role) {
@@ -279,14 +313,19 @@ function AuthenticationPanel({ product, role, onAuthenticated, onDemo }: { produ
     }
   }
 
-  const title = mode === "login" ? `Sign in to ${product}` : mode === "register" ? `Create your ${product.toLowerCase()} account` : mode === "forgot" ? "Recover your account" : "Choose a new password";
-  const description = mode === "login" ? "Protected sessions, role-based access and account activity controls are built in." : mode === "forgot" ? "Enter the email on your account. For your privacy, the response is the same whether or not an account exists." : mode === "reset" ? "Paste the reset token from your email and choose a new password. Completing this step signs out every previous session." : role === "PASSENGER" ? "Create your profile, add a trusted emergency contact and prepare your saved places. Phone verification is required before live rides." : "Create your account, then complete driver and vehicle verification before going online.";
+  const title = mode === "login" ? `Sign in to ${product}` : mode === "register" ? `Create your ${product.toLowerCase()} account` : mode === "forgot" ? "Recover your account" : mode === "reset" ? "Choose a new password" : mode === "mfa" ? "Verify your secure sign-in" : "Secure your staff account";
+  const description = mode === "login" ? "Protected sessions, role-based access and account activity controls are built in." : mode === "forgot" ? "Enter the email on your account. For your privacy, the response is the same whether or not an account exists." : mode === "reset" ? "Paste the reset token from your email and choose a new password. Completing this step signs out every previous session." : mode === "mfa" ? "Staff portals require a second factor after the password. Authenticator codes expire every 30 seconds and recovery codes work only once." : mode === "mfa-enroll" ? "Use an authenticator app such as Google Authenticator, Microsoft Authenticator or 1Password. No SMS or paid service is required." : role === "PASSENGER" ? "Create your profile, add a trusted emergency contact and prepare your saved places. Phone verification is required before live rides." : "Create your account, then complete driver and vehicle verification before going online.";
   return <section className="auth-shell" aria-labelledby="auth-title">
     <div className="auth-intro"><span className="eyebrow">Secure account access</span><h1 id="auth-title">{title}</h1><p>{description}</p></div>
     <form className="auth-card" onSubmit={submit}>
       {notice && <p className="notice" role="status">{notice}</p>}
       {mode === "forgot" && <label>Email address<input name="email" type="email" autoComplete="email" required /></label>}
       {mode === "reset" && <><label>Reset token<input name="token" autoComplete="one-time-code" required minLength={32} /></label><label>New password<input name="password" type="password" autoComplete="new-password" required minLength={12} maxLength={128} /></label><label>Confirm new password<input name="passwordConfirmation" type="password" autoComplete="new-password" required minLength={12} maxLength={128} /></label></>}
+      {mode === "mfa" && <label>Authenticator or recovery code<input name="code" autoComplete="one-time-code" required minLength={6} maxLength={20} autoFocus /></label>}
+      {mode === "mfa-enroll" && <>{!mfaSetup
+        ? <p className="privacy-hint">Continue to generate a private authenticator secret and eight one-time recovery codes. Setup expires in five minutes.</p>
+        : <><div className="mfa-secret"><span>Manual setup key</span><strong>{mfaSetup.secret}</strong><a href={mfaSetup.provisioningUri}>Open authenticator app</a></div><div className="mfa-recovery" aria-label="One-time recovery codes">{mfaSetup.recoveryCodes.map((code) => <code key={code}>{code}</code>)}</div><p className="privacy-hint">Store these recovery codes offline now. LibSwiftRide stores only their hashes and cannot display them again.</p><label>Current six-digit code<input name="code" inputMode="numeric" autoComplete="one-time-code" required pattern="[0-9]{6}" maxLength={6} autoFocus /></label></>}
+      </>}
       {(mode === "login" || mode === "register") && <>
       {mode === "register" && <div className="form-row"><label>First name<input name="firstName" autoComplete="given-name" required maxLength={80} /></label><label>Last name<input name="lastName" autoComplete="family-name" required maxLength={80} /></label></div>}
       <label>Mobile number<input name="phone" type="tel" autoComplete="tel" required minLength={8} maxLength={20} placeholder="e.g. 0770000000" /></label>
@@ -309,7 +348,7 @@ function AuthenticationPanel({ product, role, onAuthenticated, onDemo }: { produ
       <label className="check-row"><input name="remember" type="checkbox" defaultChecked /> Keep me signed in on this device</label>
       </>}
       {error && <p className="notice error" role="alert">{error}</p>}
-      <button className="action" disabled={busy}>{busy ? "Please wait…" : mode === "login" ? "Sign in securely" : mode === "register" ? "Create account" : mode === "forgot" ? "Send reset instructions" : "Reset password"}</button>
+      <button className="action" disabled={busy}>{busy ? "Please wait…" : mode === "login" ? "Sign in securely" : mode === "register" ? "Create account" : mode === "forgot" ? "Send reset instructions" : mode === "reset" ? "Reset password" : mode === "mfa" ? "Verify and sign in" : mfaSetup ? "Enable MFA and sign in" : "Continue secure setup"}</button>
       {canRegister && (mode === "login" || mode === "register") && <button className="link-button" type="button" onClick={() => { setMode(mode === "login" ? "register" : "login"); setError(""); setNotice(""); }}>{mode === "login" ? "New to LibSwiftRide? Create an account" : "Already registered? Sign in"}</button>}
       {onDemo && mode === "login" && <button className="action secondary" type="button" disabled={busy} onClick={() => void onDemo()}>Continue with demo</button>}
       {mode === "login" && <button className="link-button auth-help" type="button" onClick={() => { setMode("forgot"); setError(""); setNotice(""); }}>Forgot your password?</button>}
@@ -318,9 +357,10 @@ function AuthenticationPanel({ product, role, onAuthenticated, onDemo }: { produ
   </section>;
 }
 
-function AccountPanel({ profile, sessions, error, onClose, onProfile, onSessions, onError }: {
+function AccountPanel({ profile, sessions, mfaStatus, error, onClose, onProfile, onSessions, onError }: {
   profile: Profile | null;
   sessions: Session[];
+  mfaStatus: MfaStatus | null;
   error: string;
   onClose: () => void;
   onProfile: (profile: Profile) => void;
@@ -329,6 +369,9 @@ function AccountPanel({ profile, sessions, error, onClose, onProfile, onSessions
 }) {
   const [verificationState, setVerificationState] = useState<"idle" | "sending" | "sent" | "confirming">("idle");
   const [verificationToken, setVerificationToken] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
+  const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
+  const [rotatingCodes, setRotatingCodes] = useState(false);
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
@@ -368,6 +411,18 @@ function AccountPanel({ profile, sessions, error, onClose, onProfile, onSessions
     } catch (requestError) { setVerificationState("sent"); onError((requestError as Error).message); }
   }
 
+  async function rotateRecoveryCodes(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setRotatingCodes(true);
+    try {
+      const response = await apiClient.request<{ data: { recoveryCodes: string[] } }>("/auth/mfa/recovery-codes", { method: "POST", body: JSON.stringify({ code: mfaCode }) });
+      setRecoveryCodes(response.data.recoveryCodes);
+      setMfaCode("");
+      onError("");
+    } catch (requestError) { onError((requestError as Error).message); }
+    finally { setRotatingCodes(false); }
+  }
+
   return <aside className="account-drawer" aria-label="Account and security settings">
     <div className="toolbar"><div><span className="eyebrow">Account</span><h2>Profile & security</h2></div><button className="link-button" onClick={onClose}>Close</button></div>
     {error && <p className="notice error" role="alert">{error}</p>}
@@ -379,6 +434,7 @@ function AccountPanel({ profile, sessions, error, onClose, onProfile, onSessions
       <button className="action">Save profile</button>
     </form>}
     {profile?.email && !profile.emailVerifiedAt && <section className="account-verification" aria-labelledby="email-verification-title"><h3 id="email-verification-title">Verify email</h3><p>Verify {profile.email} to use account recovery and receive security notices.</p><button className="action secondary" type="button" disabled={verificationState === "sending" || verificationState === "confirming"} onClick={() => void requestEmailVerification()}>{verificationState === "sending" ? "Sending…" : verificationState === "sent" || verificationState === "confirming" ? "Send another code" : "Send verification code"}</button>{(verificationState === "sent" || verificationState === "confirming") && <form onSubmit={confirmEmailVerification}><label>Verification token<input value={verificationToken} onChange={(event) => setVerificationToken(event.target.value)} autoComplete="one-time-code" minLength={32} required /></label><button className="action" disabled={verificationState === "confirming"}>{verificationState === "confirming" ? "Verifying…" : "Verify email"}</button></form>}</section>}
+    {mfaStatus?.required && <section className="account-verification" aria-labelledby="mfa-security-title"><h3 id="mfa-security-title">Authenticator security</h3><p><strong>{mfaStatus.enabled ? "MFA enabled" : "MFA setup required"}</strong><br /><small>{recoveryCodes.length || mfaStatus.recoveryCodesRemaining} one-time recovery codes available.</small></p>{mfaStatus.enabled && <form onSubmit={rotateRecoveryCodes}><label>Current authenticator code<input value={mfaCode} onChange={(event) => setMfaCode(event.target.value)} inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} required /></label><button className="action secondary" disabled={rotatingCodes}>{rotatingCodes ? "Generating…" : "Replace recovery codes"}</button></form>}{recoveryCodes.length > 0 && <><div className="mfa-recovery" aria-label="New one-time recovery codes">{recoveryCodes.map((code) => <code key={code}>{code}</code>)}</div><p className="privacy-hint">Store these offline now. The previous recovery codes no longer work, and these codes cannot be shown again.</p></>}</section>}
     <div className="account-sessions"><h3>Active sessions</h3>{sessions.length ? sessions.map((session) => <div className="mini-row" key={session.id}><span>Signed in {new Date(session.createdAt).toLocaleDateString()}<small>Expires {new Date(session.expiresAt).toLocaleDateString()}</small></span><button className="link-button" onClick={() => revoke(session.id)}>Revoke</button></div>) : <p>No other active sessions.</p>}</div>
     <button className="danger-button" onClick={() => apiClient.logout().finally(() => window.location.reload())}>Sign out of this device</button>
   </aside>;

@@ -31,6 +31,7 @@ jobs:
       CORS_ORIGINS: http://localhost:3000
       JWT_ACCESS_SECRET: ci-access-secret-at-least-32-characters
       JWT_REFRESH_SECRET: ci-refresh-secret-at-least-32-characters
+      MFA_ENCRYPTION_KEY: ci-mfa-encryption-key-at-least-32-characters
       PAYMENT_WEBHOOK_SECRET: ci-webhook-secret-at-least-16
     steps:
       - uses: actions/checkout@v4

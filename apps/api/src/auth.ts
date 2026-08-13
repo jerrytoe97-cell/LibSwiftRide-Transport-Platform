@@ -4,8 +4,9 @@ import type { NextFunction, Request, Response } from "express";
 import { SignJWT, jwtVerify } from "jose";
 import { config } from "./config.js";
 import { prisma } from "./lib.js";
+import { requiresMfa } from "./services/mfa.js";
 
-export type AuthUser = { sub: string; role: string };
+export type AuthUser = { sub: string; role: string; mfa?: boolean };
 declare global {
   namespace Express {
     interface Request { user?: AuthUser }
@@ -22,15 +23,15 @@ const digest = (value: string) => createHash("sha256").update(value).digest("hex
 export async function verifyAccessToken(token: string): Promise<AuthUser> {
   const { payload } = await jwtVerify(token, accessSecret);
   if (!payload.sub || !payload.role) throw new Error("Invalid access token payload");
-  return { sub: payload.sub, role: String(payload.role) };
+  return { sub: payload.sub, role: String(payload.role), mfa: payload.mfa === true };
 }
 
 export async function issueTokens(user: AuthUser) {
-  const accessToken = await new SignJWT({ role: user.role })
+  const accessToken = await new SignJWT({ role: user.role, mfa: user.mfa === true })
     .setProtectedHeader({ alg: "HS256" }).setSubject(user.sub).setIssuedAt()
     .setExpirationTime(config.ACCESS_TOKEN_TTL).sign(accessSecret);
   const tokenId = randomUUID();
-  const refreshToken = await new SignJWT({ role: user.role, jti: tokenId })
+  const refreshToken = await new SignJWT({ role: user.role, mfa: user.mfa === true, jti: tokenId })
     .setProtectedHeader({ alg: "HS256" }).setSubject(user.sub).setIssuedAt()
     .setExpirationTime(`${config.REFRESH_TOKEN_TTL_DAYS}d`).sign(refreshSecret);
   await prisma.refreshToken.create({
@@ -49,7 +50,8 @@ export async function rotateRefreshToken(token: string) {
   const stored = await prisma.refreshToken.findUnique({ where: { tokenHash: digest(token) } });
   if (!stored || stored.revokedAt || stored.expiresAt < new Date()) throw new Error("Refresh token is expired or revoked");
   await prisma.refreshToken.update({ where: { id: stored.id }, data: { revokedAt: new Date() } });
-  return issueTokens({ sub: payload.sub, role: String(payload.role) });
+  if (requiresMfa(String(payload.role)) && payload.mfa !== true) throw new Error("MFA is required");
+  return issueTokens({ sub: payload.sub, role: String(payload.role), mfa: payload.mfa === true });
 }
 
 export async function revokeRefreshToken(token: string) {
@@ -66,6 +68,7 @@ const authenticateHandler = async (req: Request, res: Response, next: NextFuncti
   if (!token) return res.status(401).json({ error: { code: "UNAUTHENTICATED", message: "Bearer token required" } });
   try {
     const claims = await verifyAccessToken(token);
+    if (requiresMfa(claims.role) && !claims.mfa) return res.status(401).json({ error: { code: "MFA_REQUIRED", message: "Multi-factor authentication is required" } });
     const user = await prisma.user.findUnique({ where: { id: claims.sub }, select: { id: true, role: true, status: true } });
     if (!user || user.status !== "ACTIVE") return res.status(401).json({ error: { code: "ACCOUNT_INACTIVE", message: "Account is unavailable" } });
     req.user = { sub: user.id, role: user.role };

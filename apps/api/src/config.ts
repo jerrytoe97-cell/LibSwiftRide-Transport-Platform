@@ -21,6 +21,7 @@ export const environmentSchema = z.object({
   CORS_ORIGINS: z.string().min(1),
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
+  MFA_ENCRYPTION_KEY: z.preprocess((value) => value === "" ? undefined : value, z.string().min(32).optional()),
   ACCESS_TOKEN_TTL: z.string().default("15m"),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
   PAYMENTS_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
@@ -50,6 +51,9 @@ export const environmentSchema = z.object({
   if (environment.NODE_ENV === "production" && !environment.METRICS_TOKEN) {
     context.addIssue({ code: "custom", path: ["METRICS_TOKEN"], message: "METRICS_TOKEN is required in production" });
   }
+  if (environment.NODE_ENV === "production" && !environment.MFA_ENCRYPTION_KEY) {
+    context.addIssue({ code: "custom", path: ["MFA_ENCRYPTION_KEY"], message: "MFA_ENCRYPTION_KEY is required in production" });
+  }
   if (environment.NODE_ENV === "production" && environment.PAYMENTS_ENABLED && environment.PAYMENT_PROVIDER !== "mobile-money") {
     context.addIssue({ code: "custom", path: ["PAYMENT_PROVIDER"], message: "Production payments require PAYMENT_PROVIDER=mobile-money" });
   }
@@ -70,7 +74,7 @@ export const environmentSchema = z.object({
     if (environment.ROUTING_PROVIDER === "mapbox" && !environment.MAPBOX_ROUTING_TOKEN) {
       context.addIssue({ code: "custom", path: ["MAPBOX_ROUTING_TOKEN"], message: "MAPBOX_ROUTING_TOKEN is required when ROUTING_PROVIDER=mapbox" });
     }
-    for (const [field, secret] of [["JWT_ACCESS_SECRET", environment.JWT_ACCESS_SECRET], ["JWT_REFRESH_SECRET", environment.JWT_REFRESH_SECRET], ["PAYMENT_WEBHOOK_SECRET", environment.PAYMENT_WEBHOOK_SECRET]] as const) {
+    for (const [field, secret] of [["JWT_ACCESS_SECRET", environment.JWT_ACCESS_SECRET], ["JWT_REFRESH_SECRET", environment.JWT_REFRESH_SECRET], ["PAYMENT_WEBHOOK_SECRET", environment.PAYMENT_WEBHOOK_SECRET], ["MFA_ENCRYPTION_KEY", environment.MFA_ENCRYPTION_KEY ?? ""]] as const) {
       if (/replace|example|change|development|test-secret/i.test(secret)) {
         context.addIssue({ code: "custom", path: [field], message: `${field} contains a placeholder value` });
       }

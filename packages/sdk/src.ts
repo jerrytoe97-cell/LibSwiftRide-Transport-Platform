@@ -10,6 +10,14 @@ export class ApiRequestError extends Error {
   }
 }
 export type SessionTokens = { accessToken: string; refreshToken: string };
+export type LoginResult = {
+  data: { id: string; role: string };
+  tokens?: SessionTokens;
+  mfaRequired?: boolean;
+  challengeToken?: string;
+  mfaEnrollmentRequired?: boolean;
+  enrollmentToken?: string;
+};
 const accessTokenKey = "lsr_access_token";
 const refreshTokenKey = "lsr_refresh_token";
 
@@ -67,7 +75,13 @@ export class LibSwiftRideClient {
   }
 
   async login(phone: string, password: string, persistent = true) {
-    const result = await this.request<{ tokens: SessionTokens }>("/auth/login", { method: "POST", body: JSON.stringify({ phone, password }), skipAuthRefresh: true });
+    const result = await this.request<LoginResult>("/auth/login", { method: "POST", body: JSON.stringify({ phone, password }), skipAuthRefresh: true });
+    if (result.tokens) this.setSession(result.tokens, persistent);
+    return result;
+  }
+
+  async completeMfa(path: "/auth/mfa/challenge" | "/auth/mfa/enrollment/confirm", input: Record<string, string>, persistent = true) {
+    const result = await this.request<{ data: { id: string; role: string }; tokens: SessionTokens }>(path, { method: "POST", body: JSON.stringify(input), skipAuthRefresh: true });
     this.setSession(result.tokens, persistent);
     return result;
   }

@@ -29,7 +29,7 @@ const httpDuration = new Histogram({ name: "libswiftride_http_request_duration_s
 app.disable("x-powered-by");
 app.use(helmet());
 app.use(cors({ origin: config.corsOrigins, credentials: true }));
-app.use(pinoHttp({ logger, genReqId: (req, res) => { const id = String(req.headers["x-request-id"] ?? randomUUID()); res.setHeader("x-request-id", id); return id; }, redact: ["req.headers.authorization", "req.body.password", "req.body.phone", "req.body.paymentNumber", "res.headers.set-cookie"] }));
+app.use(pinoHttp({ logger, genReqId: (req, res) => { const id = String(req.headers["x-request-id"] ?? randomUUID()); res.setHeader("x-request-id", id); return id; }, redact: ["req.headers.authorization", "req.body.password", "req.body.phone", "req.body.paymentNumber", "req.body.code", "req.body.challengeToken", "req.body.enrollmentToken", "req.body.refreshToken", "res.headers.set-cookie"] }));
 app.use((req, res, next) => {
   const end = httpDuration.startTimer();
   res.on("finish", () => {
@@ -42,6 +42,7 @@ app.use((req, res, next) => {
 app.use("/api", rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api/v1/auth", rateLimit({ windowMs: 15 * 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api/v1/auth/login", rateLimit({ windowMs: 15 * 60_000, limit: 10, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/auth/mfa", rateLimit({ windowMs: 15 * 60_000, limit: 10, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api/v1/auth/email-verification", rateLimit({ windowMs: 15 * 60_000, limit: 6, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api/v1/auth/password-reset", rateLimit({ windowMs: 60 * 60_000, limit: 8, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api/v1/rides", rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: "draft-8", legacyHeaders: false }));

@@ -194,8 +194,20 @@ model User {
   corporateMembership CorporateEmployee?
   deliveries          Delivery[]          @relation("DeliveryCustomer")
   ridePasses          RidePass[]
+  mfaCredential       MfaCredential?
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
+}
+
+model MfaCredential {
+  id                 String   @id @default(uuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  encryptedSecret    String
+  recoveryCodeHashes Json
+  verifiedAt         DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 }
 
 model VerificationToken {

@@ -42,6 +42,8 @@ services:
         generateValue: true
       - key: JWT_REFRESH_SECRET
         generateValue: true
+      - key: MFA_ENCRYPTION_KEY
+        generateValue: true
       - key: PAYMENT_WEBHOOK_SECRET
         generateValue: true
       - key: METRICS_TOKEN

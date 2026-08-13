@@ -15,6 +15,9 @@ const routes = ((api as unknown as { stack: RouteLayer[] }).stack)
 const publicRoutes = new Set([
   "POST /auth/register",
   "POST /auth/login",
+  "POST /auth/mfa/enrollment/start",
+  "POST /auth/mfa/enrollment/confirm",
+  "POST /auth/mfa/challenge",
   "POST /auth/demo-login",
   "POST /auth/refresh",
   "POST /auth/logout",

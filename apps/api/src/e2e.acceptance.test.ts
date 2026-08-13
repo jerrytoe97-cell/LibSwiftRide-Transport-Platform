@@ -7,6 +7,7 @@ import { hashPassword, issueTokens } from "./auth.js";
 import { prisma, redis } from "./lib.js";
 import { updateDriverLocation } from "./services/dispatch.js";
 import { purgeExpiredRoutePoints } from "./services/location-retention.js";
+import { totp } from "./services/mfa.js";
 
 const app = express();
 app.use(express.json());
@@ -34,7 +35,7 @@ describe.sequential("end-to-end acceptance", () => {
     }), { status: 200 })));
     await redis.connect().catch(() => undefined);
     const admin = await prisma.user.create({ data: { phone: `055${suffix.slice(-7)}`, email: `admin-${suffix}@example.test`, passwordHash: await hashPassword("Acceptance-only-password-123!"), firstName: "Acceptance", lastName: "Admin", role: "ADMIN", status: "ACTIVE" } });
-    adminToken = (await issueTokens({ sub: admin.id, role: admin.role })).accessToken;
+    adminToken = (await issueTokens({ sub: admin.id, role: admin.role, mfa: true })).accessToken;
   });
 
   afterAll(async () => {
@@ -60,6 +61,40 @@ describe.sequential("end-to-end acceptance", () => {
     expect(profile.body.data.role).toBe("PASSENGER");
     await request(app).patch("/api/v1/users/me").set("authorization", `Bearer ${passengerToken}`).send({ firstName: "Updated", locale: "fr" }).expect(200);
     await request(app).post("/api/v1/devices").set("authorization", `Bearer ${passengerToken}`).send({ platform: "web", pushToken: `acceptance-web-push-${suffix}` }).expect(200);
+  });
+
+  it("requires staff MFA enrollment, challenge, and single-use recovery codes", async () => {
+    const phone = `066${suffix.slice(-7)}`;
+    const password = "Dispatcher-MFA-password-123!";
+    await prisma.user.create({ data: { phone, email: `dispatcher-${suffix}@example.test`, passwordHash: await hashPassword(password), firstName: "MFA", lastName: "Dispatcher", role: "DISPATCHER", status: "ACTIVE" } });
+    const firstLogin = await request(app).post("/api/v1/auth/login").send({ phone, password }).expect(200);
+    expect(firstLogin.body.tokens).toBeUndefined();
+    expect(firstLogin.body.mfaEnrollmentRequired).toBe(true);
+    const setup = await request(app).post("/api/v1/auth/mfa/enrollment/start").send({ enrollmentToken: firstLogin.body.enrollmentToken }).expect(200);
+    expect(setup.headers["cache-control"]).toContain("no-store");
+    expect(setup.body.data.recoveryCodes).toHaveLength(8);
+    const confirmed = await request(app).post("/api/v1/auth/mfa/enrollment/confirm").send({ enrollmentToken: firstLogin.body.enrollmentToken, code: totp(setup.body.data.secret) }).expect(200);
+    expect(confirmed.body.tokens.accessToken).toBeTruthy();
+    await request(app).get("/api/v1/auth/mfa/status").set("authorization", `Bearer ${confirmed.body.tokens.accessToken}`).expect(200).expect(({ body }) => {
+      expect(body.data).toMatchObject({ required: true, enabled: true, recoveryCodesRemaining: 8 });
+    });
+    await request(app).post("/api/v1/auth/mfa/enrollment/confirm").send({ enrollmentToken: firstLogin.body.enrollmentToken, code: totp(setup.body.data.secret) }).expect(401);
+
+    const secondLogin = await request(app).post("/api/v1/auth/login").send({ phone, password }).expect(200);
+    expect(secondLogin.body.mfaRequired).toBe(true);
+    await request(app).post("/api/v1/auth/mfa/challenge").send({ challengeToken: secondLogin.body.challengeToken, code: "000000" }).expect(401);
+    const totpLogin = await request(app).post("/api/v1/auth/mfa/challenge").send({ challengeToken: secondLogin.body.challengeToken, code: totp(setup.body.data.secret) }).expect(200);
+    const rotated = await request(app).post("/api/v1/auth/mfa/recovery-codes").set("authorization", `Bearer ${totpLogin.body.tokens.accessToken}`).send({ code: totp(setup.body.data.secret) }).expect(200);
+    expect(rotated.headers["cache-control"]).toContain("no-store");
+    expect(rotated.body.data.recoveryCodes).toHaveLength(8);
+    expect(rotated.body.data.recoveryCodes).not.toContain(setup.body.data.recoveryCodes[0]);
+    const recoveryCode = rotated.body.data.recoveryCodes[0];
+
+    const recoveryChallenge = await request(app).post("/api/v1/auth/login").send({ phone, password }).expect(200);
+    const recoveryLogin = await request(app).post("/api/v1/auth/mfa/challenge").send({ challengeToken: recoveryChallenge.body.challengeToken, code: recoveryCode }).expect(200);
+    expect(recoveryLogin.body.tokens.refreshToken).toBeTruthy();
+    const thirdLogin = await request(app).post("/api/v1/auth/login").send({ phone, password }).expect(200);
+    await request(app).post("/api/v1/auth/mfa/challenge").send({ challengeToken: thirdLogin.body.challengeToken, code: recoveryCode }).expect(401);
   });
 
   it("registers, submits and approves driver verification", async () => {
@@ -185,13 +220,13 @@ describe.sequential("end-to-end acceptance", () => {
 
   it("executes corporate, fleet, dispatcher and admin ownership workflows", async () => {
     const manager = await prisma.user.create({ data: { phone: `044${suffix.slice(-7)}`, email: `manager-${suffix}@example.test`, passwordHash: await hashPassword("Manager-password-123!"), firstName: "Business", lastName: "Manager", role: "PASSENGER", status: "ACTIVE" } });
-    const managerToken = (await issueTokens({ sub: manager.id, role: manager.role })).accessToken;
+    const managerToken = (await issueTokens({ sub: manager.id, role: manager.role, mfa: true })).accessToken;
     const account = await request(app).post("/api/v1/admin/corporate/accounts").set("authorization", `Bearer ${adminToken}`).send({ name: "Acceptance Company", billingEmail: `billing-${suffix}@example.test`, managerId: manager.id, monthlyBudgetMinor: 100_000 }).expect(201);
     await request(app).post("/api/v1/corporate/employees").set("authorization", `Bearer ${managerToken}`).send({ accountId: account.body.data.id, userId: passengerId, monthlyLimitMinor: 50_000 }).expect(201);
     await request(app).get("/api/v1/corporate/account").set("authorization", `Bearer ${managerToken}`).expect(200);
     const fleetManager = await prisma.user.create({ data: { phone: `033${suffix.slice(-7)}`, passwordHash: await hashPassword("Fleet-password-123!"), firstName: "Fleet", lastName: "Manager", role: "FLEET_MANAGER", status: "ACTIVE" } });
     const fleet = await prisma.fleet.create({ data: { name: "Acceptance Fleet", managerId: fleetManager.id } });
-    const fleetToken = (await issueTokens({ sub: fleetManager.id, role: fleetManager.role })).accessToken;
+    const fleetToken = (await issueTokens({ sub: fleetManager.id, role: fleetManager.role, mfa: true })).accessToken;
     await request(app).post("/api/v1/fleet/drivers").set("authorization", `Bearer ${fleetToken}`).send({ fleetId: fleet.id, driverId }).expect(201);
     await request(app).get("/api/v1/fleet/overview").set("authorization", `Bearer ${fleetToken}`).expect(200);
     await request(app).get("/api/v1/dispatch/rides").set("authorization", `Bearer ${adminToken}`).expect(200);
