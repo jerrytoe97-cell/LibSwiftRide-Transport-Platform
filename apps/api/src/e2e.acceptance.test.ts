@@ -61,6 +61,11 @@ describe.sequential("end-to-end acceptance", () => {
     expect(profile.body.data.role).toBe("PASSENGER");
     await request(app).patch("/api/v1/users/me").set("authorization", `Bearer ${passengerToken}`).send({ firstName: "Updated", locale: "fr" }).expect(200);
     await request(app).post("/api/v1/devices").set("authorization", `Bearer ${passengerToken}`).send({ platform: "web", pushToken: `acceptance-web-push-${suffix}` }).expect(200);
+    const login = await request(app).post("/api/v1/auth/login").send({ phone: passengerPhone, password: "Passenger-password-123!" }).expect(200);
+    expect(login.body.tokens.accessToken).toBeTruthy();
+    expect(login.body.mfaRequired).toBeUndefined();
+    await request(app).post("/api/v1/auth/logout").send({ refreshToken: login.body.tokens.refreshToken }).expect(204);
+    await request(app).post("/api/v1/auth/refresh").send({ refreshToken: login.body.tokens.refreshToken }).expect(401);
   });
 
   it("requires staff MFA enrollment, challenge, and single-use recovery codes", async () => {
@@ -95,11 +100,16 @@ describe.sequential("end-to-end acceptance", () => {
     expect(recoveryLogin.body.tokens.refreshToken).toBeTruthy();
     const thirdLogin = await request(app).post("/api/v1/auth/login").send({ phone, password }).expect(200);
     await request(app).post("/api/v1/auth/mfa/challenge").send({ challengeToken: thirdLogin.body.challengeToken, code: recoveryCode }).expect(401);
+    const oldPrivilegedToken = (await issueTokens({ sub: firstLogin.body.data.id, role: "DISPATCHER" })).accessToken;
+    await request(app).get("/api/v1/auth/mfa/status").set("authorization", `Bearer ${oldPrivilegedToken}`).expect(401);
   });
 
   it("registers, submits and approves driver verification", async () => {
     const registered = await request(app).post("/api/v1/auth/register").send({ phone: driverPhone, email: `driver-${suffix}@example.test`, password: "Driver-password-123!", firstName: "Test", lastName: "Driver", role: "DRIVER" }).expect(201);
     driverToken = registered.body.tokens.accessToken;
+    const driverLogin = await request(app).post("/api/v1/auth/login").send({ phone: driverPhone, password: "Driver-password-123!" }).expect(200);
+    expect(driverLogin.body.tokens.accessToken).toBeTruthy();
+    expect(driverLogin.body.mfaRequired).toBeUndefined();
     const onboarded = await request(app).post("/api/v1/drivers/onboarding").set("authorization", `Bearer ${driverToken}`).send({ licenseNumber: `LIC-${suffix}`, nationalIdRef: `test-id-${suffix}` }).expect(200);
     driverId = onboarded.body.data.id;
     for (const type of ["NATIONAL_ID", "DRIVER_LICENSE", "PROFILE_PHOTO"]) {

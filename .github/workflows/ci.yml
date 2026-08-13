@@ -46,6 +46,16 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      - name: Exercise isolated backup and restore validation
+        env:
+          PGPASSWORD: test
+          RECOVERY_DATABASE_URL: postgresql://test:test@localhost:5432/libswiftride_recovery
+        run: |
+          pg_dump "$DATABASE_URL" --format=custom --file=/tmp/libswiftride-test.dump
+          psql postgresql://test:test@localhost:5432/postgres --set=ON_ERROR_STOP=1 --command='CREATE DATABASE libswiftride_recovery'
+          pg_restore --dbname="$RECOVERY_DATABASE_URL" --exit-on-error /tmp/libswiftride-test.dump
+          DATABASE_URL="$RECOVERY_DATABASE_URL" pnpm recovery:validate
+          rm -f /tmp/libswiftride-test.dump
       - run: pnpm build
 
   container:

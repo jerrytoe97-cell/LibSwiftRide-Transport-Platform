@@ -53,6 +53,38 @@ test("passenger portal preserves the screen and offers recovery when offline", a
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
+test("driver portal preserves sign-in and recovery guidance when offline", async ({ page, context }) => {
+  await expectHealthyDocument(page, staging.driver);
+  await context.setOffline(true);
+  await expect(page.getByRole("alert")).toContainText("Live maps, booking, GPS sharing and account changes are paused");
+  await expect(page.getByRole("button", { name: "Try connection again" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in to Driver" })).toBeVisible();
+  await context.setOffline(false);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
+test("mobile public entry points have no horizontal overflow and expose a skip link", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.includes("mobile"), "Mobile-only responsive check");
+  for (const url of [staging.web, staging.passenger, staging.driver, staging.admin, staging.dispatcher, staging.fleet, staging.business]) {
+    await expectHealthyDocument(page, url);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1), `${url} overflows horizontally`).toBe(true);
+    const skipLink = page.getByRole("link", { name: "Skip to main content" });
+    await expect(skipLink).toHaveAttribute("href", "#main-content");
+    expect(await page.locator("main h1").count(), `${url} needs one primary heading`).toBeGreaterThanOrEqual(1);
+  }
+});
+
+test("staff login enters the MFA challenge without creating a password-only session", async ({ page }) => {
+  await page.route("**/api/v1/auth/login", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ data: { id: "synthetic-admin", role: "ADMIN" }, mfaRequired: true, challengeToken: "a".repeat(64) }) }));
+  await expectHealthyDocument(page, staging.admin);
+  await page.getByLabel("Mobile number").fill("+231000000000");
+  await page.getByLabel("Password", { exact: true }).fill("Synthetic-only-Password-1!");
+  await page.getByRole("button", { name: /sign in/i }).click();
+  await expect(page.getByRole("heading", { name: "Verify your secure sign-in" })).toBeVisible();
+  await expect(page.getByLabel("Authenticator or recovery code")).toBeVisible();
+  expect(await page.evaluate(() => Boolean(localStorage.getItem("lsr_access_token") || sessionStorage.getItem("lsr_access_token")))).toBe(false);
+});
+
 for (const [product, url, allowsRegistration] of portals) {
   test(`${product} portal exposes the correct protected authentication entry`, async ({ page }) => {
     await expectHealthyDocument(page, url);

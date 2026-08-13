@@ -29,3 +29,15 @@ Test foreground location allowed; permission denied and restored; driver backgro
 Record UTC timestamps, request IDs, sanitized screenshots, reconnect duration and GPS update gaps. Fail the run for unauthorized access, duplicate booking/acceptance/payment, impossible transitions, incorrect allocation, unrecovered tracking, a missing SOS event, tokens in logs or crashes.
 
 A pass requires no P0/P1 defect, tracking recovery within the approved staging SLA, balanced financial records, a usable manual fallback after location denial, active-trip survival through refresh/relaunch, and completion without enabling Orange Money, MTN MoMo or Stripe. Attach the matrix to the immutable staging release record; never commit identifiers, account details or location traces.
+
+## Physical permission prompts
+
+These system dialogs cannot be approved remotely and must be completed by the device owner:
+
+- Passenger: choose **Allow While Using App** (iOS) or **While using the app** with precise location (Android) when testing pickup detection. Repeat once with denial, then restore access in system settings.
+- Driver web staging: choose foreground/while-in-use precise location only after tapping **Go online**. Web staging does not request or promise background permission.
+- Future signed Android driver build: grant foreground precise location first. Grant **Allow all the time** only when the active-trip foreground service and persistent notification are visible and the background test begins.
+- Future signed iOS driver build: grant **While Using the App** first. Approve **Always Allow** only during the separate active-trip background test, with the iOS location indicator visible.
+- Push notifications: approve only for the staging origin/build. Do not approve camera, contacts, microphone, payment, or unrelated permissions during this matrix.
+
+If the displayed prompt differs materially, stop, capture a sanitized screenshot, and do not broaden permission access.
