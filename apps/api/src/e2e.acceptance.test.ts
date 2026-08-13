@@ -14,7 +14,6 @@ app.use(express.json());
 app.use("/api/v1", api);
 app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
   if (error instanceof ZodError) return res.status(422).json({ error: { code: "VALIDATION_ERROR" } });
-  console.error(error);
   return res.status(500).json({ error: { code: "INTERNAL_ERROR" } });
 });
 

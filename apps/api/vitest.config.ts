@@ -11,6 +11,7 @@ export default defineConfig({
       CORS_ORIGINS: "http://localhost:3000",
       JWT_ACCESS_SECRET: "test-access-secret-at-least-32-characters",
       JWT_REFRESH_SECRET: "test-refresh-secret-at-least-32-characters",
+      MFA_ENCRYPTION_KEY: "test-mfa-encryption-key-at-least-32-characters",
       PAYMENT_WEBHOOK_SECRET: "test-webhook-secret-at-least-16"
     }
   }
