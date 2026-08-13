@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ApiRequestError, apiClient, message as translatedMessage, money, passengerMessage, rideStatusLabel, supportedLocales, type SupportedLocale } from "@libswiftride/sdk";
-import { Map, Shell, Stat } from "@libswiftride/ui";
+import { Map, Shell, Stat, useNetworkStatus } from "@libswiftride/ui";
 import "@libswiftride/ui/styles.css";
 
 type Quote = {
@@ -163,6 +163,7 @@ function PlaceSearchField({ label, value, onChange }: { label: string; value: Lo
 }
 
 function App() {
+  const networkOnline = useNetworkStatus();
   const [quote, setQuote] = useState<Quote | null>(null);
   const [message, setMessage] = useState("");
   const [promo, setPromo] = useState("");
@@ -332,6 +333,10 @@ function App() {
   }, [paymentMethod]);
 
   async function getQuote() {
+    if (!networkOnline) {
+      setMessage("You are offline. Reconnect before requesting a fare estimate.");
+      return;
+    }
     const validLocation = (location: Location) => location.address.trim().length > 0
       && Number.isFinite(location.latitude) && location.latitude >= -90 && location.latitude <= 90
       && Number.isFinite(location.longitude) && location.longitude >= -180 && location.longitude <= 180;
@@ -361,6 +366,10 @@ function App() {
   }
 
   async function book() {
+    if (!networkOnline) {
+      setMessage("You are offline. Reconnect before confirming your ride.");
+      return;
+    }
     try {
       setBooking(true);
       const response = await apiClient.request<{ data: { id: string } }>("/rides", {
@@ -377,6 +386,10 @@ function App() {
   }
 
   async function requestDelivery() {
+    if (!networkOnline) {
+      setMessage("You are offline. Reconnect before requesting a delivery.");
+      return;
+    }
     try {
       const response = await apiClient.request<{ data: Delivery }>("/deliveries", {
         method: "POST",
@@ -570,8 +583,8 @@ function App() {
           )}
           {trackedRideId && <p className="notice" role="status">Live tracking: {trackingStatus === "live" ? "connected" : trackingStatus === "reconnecting" ? "reconnecting" : "connecting"}{etaSeconds ? ` · driver ETA ${Math.ceil(etaSeconds / 60)} min` : ""}</p>}
           <div className="toolbar">
-            <button className="action" disabled={!pickup.address.trim() || !destination.address.trim()} onClick={getQuote}>{translatedMessage(locale, "getEstimate")}</button>
-            {quote && <button className="action" disabled={booking || Boolean(activeRide)} onClick={book}>{passengerMessage(locale, booking ? "requesting" : activeRide ? "activeRideExists" : "confirmRide")}</button>}
+            <button className="action" disabled={!networkOnline || !pickup.address.trim() || !destination.address.trim()} onClick={getQuote}>{translatedMessage(locale, "getEstimate")}</button>
+            {quote && <button className="action" disabled={!networkOnline || booking || Boolean(activeRide)} onClick={book}>{passengerMessage(locale, booking ? "requesting" : activeRide ? "activeRideExists" : "confirmRide")}</button>}
           </div>
           {quote && (
             <div className="estimate-card" aria-live="polite">
@@ -719,7 +732,7 @@ function App() {
         </div>}
       </section>
       <section className="panel">
-        <div className="toolbar"><div><span className="eyebrow">{passengerMessage(locale, "deliveryService")}</span><h2>{passengerMessage(locale, "sendParcel")}</h2></div><button className="action" onClick={requestDelivery}>{passengerMessage(locale, "requestSampleRoute")}</button></div>
+        <div className="toolbar"><div><span className="eyebrow">{passengerMessage(locale, "deliveryService")}</span><h2>{passengerMessage(locale, "sendParcel")}</h2></div><button className="action" disabled={!networkOnline} onClick={requestDelivery}>{passengerMessage(locale, "requestSampleRoute")}</button></div>
         <p>{passengerMessage(locale, "deliveryExplanation")}</p>
         <table><thead><tr><th>{passengerMessage(locale, "route")}</th><th>{passengerMessage(locale, "status")}</th><th>{passengerMessage(locale, "fare")}</th></tr></thead><tbody>{deliveries.map((delivery) => <tr key={delivery.id}><td>{delivery.pickupAddress} → {delivery.dropoffAddress}</td><td>{delivery.status}</td><td>{money(delivery.fareMinor)}</td></tr>)}</tbody></table>
       </section>

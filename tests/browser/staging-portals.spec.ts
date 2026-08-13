@@ -43,6 +43,16 @@ test("public website opens and links to public role entry points", async ({ page
   await expect(page.locator(`a[href="${staging.business}"]`).first()).toHaveCount(1);
 });
 
+test("passenger portal preserves the screen and offers recovery when offline", async ({ page, context }) => {
+  await expectHealthyDocument(page, staging.passenger);
+  await context.setOffline(true);
+  await expect(page.getByRole("alert")).toContainText("You are offline");
+  await expect(page.getByRole("button", { name: "Try connection again" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Sign in to Passenger" })).toBeVisible();
+  await context.setOffline(false);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
 for (const [product, url, allowsRegistration] of portals) {
   test(`${product} portal exposes the correct protected authentication entry`, async ({ page }) => {
     await expectHealthyDocument(page, url);

@@ -27,6 +27,51 @@ const configuredMapboxToken = environment?.VITE_MAPBOX_ACCESS_TOKEN?.trim();
 const mapboxAccessToken = requestedMapProvider === "mapbox" && configuredMapboxToken?.startsWith("pk.") ? configuredMapboxToken : undefined;
 const brandLogoUrl = new URL("./assets/libswiftride-logo.png", import.meta.url).href;
 
+function initialNetworkOnline() {
+  return typeof navigator === "undefined" ? true : navigator.onLine;
+}
+
+export function useNetworkStatus() {
+  const [online, setOnline] = useState(initialNetworkOnline);
+
+  useEffect(() => {
+    const connected = () => setOnline(true);
+    const disconnected = () => setOnline(false);
+    window.addEventListener("online", connected);
+    window.addEventListener("offline", disconnected);
+    return () => {
+      window.removeEventListener("online", connected);
+      window.removeEventListener("offline", disconnected);
+    };
+  }, []);
+
+  return online;
+}
+
+function NetworkNotice() {
+  const online = useNetworkStatus();
+  const [checking, setChecking] = useState(false);
+
+  async function retry() {
+    setChecking(true);
+    try {
+      const healthUrl = `${apiUrl.replace(/\/api\/v1\/?$/, "")}/health/live`;
+      const response = await fetch(healthUrl, { cache: "no-store" });
+      if (response.ok) window.dispatchEvent(new Event("online"));
+    } catch {
+      // The persistent notice remains visible when the connection is unavailable.
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  if (online) return null;
+  return <div className="network-notice" role="alert">
+    <div><strong>You are offline</strong><span>Live maps, booking, GPS sharing and account changes are paused. Your current screen remains available.</span></div>
+    <button type="button" disabled={checking} onClick={() => void retry()}>{checking ? "Checking connection…" : "Try connection again"}</button>
+  </div>;
+}
+
 function initialTheme(): ThemeMode {
   if (typeof window === "undefined") return "system";
   const stored = window.localStorage.getItem("lsr_theme");
@@ -132,6 +177,7 @@ export function Shell({ product, demoRole, children }: { product: string; demoRo
   return <div className="shell">
     <a className="skip-link" href="#main-content">Skip to main content</a>
     {demoEnabled && <div className="demo-banner" role="status"><span>◆</span> Demo Environment <small>Fictional data · sandbox services · payments disabled</small></div>}
+    <NetworkNotice />
     <header className="app-header">
       <a className="brand" href={portalUrls.web} aria-label="LibSwiftRide home"><img className="brand-logo" src={brandLogoUrl} alt="" />LibSwift<span>Ride</span></a>
       <span className="product">{product}</span>

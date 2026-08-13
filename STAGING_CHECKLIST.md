@@ -59,6 +59,8 @@ Never place real values in `.env.example`, Render Blueprint source, logs or rele
 - [ ] `/health/ready` returns HTTP 200 only when PostgreSQL and Redis respond, and HTTP 503 when either is unavailable.
 - [ ] `/metrics` rejects missing/incorrect bearer tokens and is scraped only over private/TLS networking.
 - [ ] Deployment succeeds through the protected Render hook, migrations finish before traffic, and the previous artifact can be redeployed.
+- [ ] The `Staging browser smoke` workflow passes for the same validated commit and its desktop/mobile evidence artifact is
+      retained with the release record.
 
 ## Role and trip tests
 

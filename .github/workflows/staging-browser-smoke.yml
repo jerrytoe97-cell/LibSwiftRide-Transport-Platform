@@ -1,0 +1,73 @@
+name: Staging browser smoke
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [phase-2-development]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-browser-smoke
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI: true
+      STAGING_WEB_URL: https://libswiftride-web.onrender.com
+      STAGING_PASSENGER_URL: https://libswiftride-passenger.onrender.com
+      STAGING_DRIVER_URL: https://libswiftride-driver.onrender.com
+      STAGING_FLEET_URL: https://libswiftride-fleet.onrender.com
+      STAGING_ADMIN_URL: https://libswiftride-admin.onrender.com
+      STAGING_DISPATCHER_URL: https://libswiftride-dispatcher.onrender.com
+      STAGING_BUSINESS_URL: https://libswiftride-business.onrender.com
+      STAGING_API_URL: https://libswiftride-transport-platform.onrender.com
+    steps:
+      - name: Check out validated revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.13.1
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Allow checks-gated staging rollout to settle
+        if: github.event_name == 'workflow_run'
+        run: sleep 120
+
+      - name: Run staging browser smoke suite
+        run: pnpm test:browser:staging
+
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-browser-evidence-${{ github.run_id }}
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14

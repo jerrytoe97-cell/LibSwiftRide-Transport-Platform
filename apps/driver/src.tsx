@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { apiClient, money } from "@libswiftride/sdk";
-import { Action, Map, Shell, Stat } from "@libswiftride/ui";
+import { Action, Map, Shell, Stat, useNetworkStatus } from "@libswiftride/ui";
 import "@libswiftride/ui/styles.css";
 import { startLocationTracking, type LocationFailure } from "./location-runtime.js";
 
@@ -35,6 +35,7 @@ const nextStatus: Record<string, string> = {
 };
 
 function App() {
+  const networkOnline = useNetworkStatus();
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [message, setMessage] = useState("Sign in to load your driver profile.");
   const [coords, setCoords] = useState({ latitude: 6.3156, longitude: -10.8074 });
@@ -139,6 +140,10 @@ function App() {
   }, [offerSeconds]);
 
   async function setAvailability(status: "AVAILABLE" | "OFFLINE") {
+    if (!networkOnline) {
+      setMessage("You are offline. Reconnect before changing availability or sharing GPS.");
+      return;
+    }
     try {
       await apiClient.request("/drivers/me/availability", { method: "POST", body: JSON.stringify({ status }) });
       if (status === "OFFLINE") {
@@ -192,6 +197,10 @@ function App() {
 
   async function advanceRide() {
     if (!dashboard?.activeRide) return;
+    if (!networkOnline) {
+      setMessage("You are offline. Reconnect before changing the ride status.");
+      return;
+    }
     const status = nextStatus[dashboard.activeRide.status];
     if (!status) return;
     try {
@@ -205,6 +214,10 @@ function App() {
 
   async function respondToOffer(decision: "accept" | "reject") {
     if (!dashboard?.activeRide || dashboard.activeRide.status !== "DRIVER_ASSIGNED") return;
+    if (!networkOnline) {
+      setMessage("You are offline. Reconnect before responding to this ride request.");
+      return;
+    }
     try {
       await apiClient.request(`/drivers/rides/${dashboard.activeRide.id}/${decision}`, {
         method: "POST",
@@ -290,11 +303,11 @@ function App() {
       {incomingRide && <section className="incoming-ride" aria-live="assertive">
         <div><span className="eyebrow">Incoming ride request · {offerSeconds}s</span><h1>{incomingRide.passenger.firstName} needs a ride</h1><p>{incomingRide.pickupAddress} → {incomingRide.destinationAddress}</p></div>
         <div className="offer-metrics"><span><small>Estimated time</small><strong>{Math.max(1, Math.round(incomingRide.estimatedDurationSec / 60))} min</strong></span><span><small>Trip distance</small><strong>{(incomingRide.estimatedDistanceM / 1000).toFixed(1)} km</strong></span><span><small>Your earnings</small><strong>{money(incomingRide.driverEarningsMinor)}</strong></span><span><small>Payment</small><strong>{incomingRide.paymentMethod.replaceAll("_", " ")}</strong></span></div>
-        <div className="offer-actions"><Action onClick={() => respondToOffer("accept")}>Accept ride</Action><button className="reject-offer" onClick={() => respondToOffer("reject")}>Decline</button></div>
+        <div className="offer-actions"><Action disabled={!networkOnline} onClick={() => respondToOffer("accept")}>Accept ride</Action><button className="reject-offer" disabled={!networkOnline} onClick={() => respondToOffer("reject")}>Decline</button></div>
       </section>}
       <div className="toolbar">
         <div><span className="eyebrow">Driver dashboard</span><h1>Welcome{dashboard?.driver.firstName ? `, ${dashboard.driver.firstName}` : ""}.</h1><p>Current location: Monrovia</p></div>
-        <Action className={online ? "availability-online" : ""} disabled={dashboard?.driver.status === "ON_TRIP"} onClick={() => setAvailability(online ? "OFFLINE" : "AVAILABLE")}>{dashboard?.driver.status === "ON_TRIP" ? "Trip active" : online ? "● Online — go offline" : "Go online"}</Action>
+        <Action className={online ? "availability-online" : ""} disabled={!networkOnline || dashboard?.driver.status === "ON_TRIP"} onClick={() => setAvailability(online ? "OFFLINE" : "AVAILABLE")}>{dashboard?.driver.status === "ON_TRIP" ? "Trip active" : online ? "● Online — go offline" : "Go online"}</Action>
       </div>
       <p className={`notice gps-status gps-${gpsStatus}`} aria-live="polite"><strong>Live GPS:</strong> {gpsStatus === "live" ? `sharing securely${gpsAccuracyM != null ? ` · accuracy about ${gpsAccuracyM} m` : ""}${lastLocationAt ? ` · updated ${lastLocationAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : ""}` : gpsStatus === "requesting" ? "waiting for device permission…" : gpsStatus === "blocked" ? "permission blocked" : gpsStatus === "unavailable" ? "device signal unavailable" : "off — location is not being shared"}</p>
       {message && <p className="notice">{message}</p>}
@@ -312,7 +325,7 @@ function App() {
             <h2>{dashboard.activeRide.status.replaceAll("_", " ")}</h2>
             <p>{dashboard.activeRide.pickupAddress} → {dashboard.activeRide.destinationAddress}</p>
             <p><strong>{money(dashboard.activeRide.fareMinor)}</strong></p>
-            {activeNextStatus && <Action onClick={advanceRide}>Mark {activeNextStatus.replaceAll("_", " ").toLowerCase()}</Action>}
+            {activeNextStatus && <Action disabled={!networkOnline} onClick={advanceRide}>Mark {activeNextStatus.replaceAll("_", " ").toLowerCase()}</Action>}
             {dashboard.activeRide.status === "DRIVER_ARRIVED" && <p>Waiting for the passenger to confirm boarding.</p>}
             {navigationUrl && <a className="action navigation-link" href={navigationUrl} target="_blank" rel="noreferrer">Open turn-by-turn navigation</a>}
             <a className="action contact-link" href={`tel:${dashboard.activeRide.passenger.phone}`}>Call passenger</a>
