@@ -21,6 +21,13 @@ import { queueDocumentExpiryReminders } from "./services/document-reminders.js";
 import { decodeRideRealtimeEvent, publishRideRealtimeEvent, RIDE_REALTIME_CHANNEL } from "./services/ride-realtime.js";
 import { loadOpenApiYaml } from "./services/openapi.js";
 import { purgeExpiredRoutePoints } from "./services/location-retention.js";
+import { consumeStartupProvisioningEnvironment, provisionPrivilegedAccounts, STARTUP_PROVISIONING_MARKER } from "./services/privileged-provisioning.js";
+
+const startupProvisioningAccounts = consumeStartupProvisioningEnvironment(process.env);
+if (startupProvisioningAccounts) {
+  const result = await provisionPrivilegedAccounts(prisma, startupProvisioningAccounts, { singleUseMarker: STARTUP_PROVISIONING_MARKER });
+  logger.info({ status: result.status, accountCount: result.count }, "privileged staging startup provisioning handled");
+}
 
 const app = express();
 collectDefaultMetrics({ prefix: "libswiftride_" });

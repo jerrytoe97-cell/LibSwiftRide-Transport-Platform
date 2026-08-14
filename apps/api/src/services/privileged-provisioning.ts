@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { Prisma, type PrismaClient } from "@prisma/client";
+import { hashPassword } from "../auth.js";
 
 export const privilegedRoles = ["ADMIN", "DISPATCHER", "FLEET_MANAGER", "BUSINESS_MANAGER"] as const;
 
@@ -44,4 +46,87 @@ export function parsePrivilegedAccounts(raw: string): PrivilegedAccountInput[] {
     throw new Error("PRIVILEGED_ACCOUNTS_JSON must contain valid JSON");
   }
   return privilegedAccountsSchema.parse(value).map((account) => ({ ...account, email: account.email.toLowerCase() }));
+}
+
+export const PRIVILEGED_PROVISIONING_CONFIRMATION = "PROVISION_STAGING_PRIVILEGED_ACCOUNTS";
+export const STARTUP_PROVISIONING_MARKER = "privileged-staging-startup-v1";
+
+type ProvisioningResult = { status: "provisioned"; count: number } | { status: "already-completed"; count: 0 };
+
+export async function provisionPrivilegedAccounts(
+  prisma: PrismaClient,
+  rawAccounts: string,
+  options: { singleUseMarker?: string } = {}
+): Promise<ProvisioningResult> {
+  const accounts = parsePrivilegedAccounts(rawAccounts);
+  const preparedAccounts = await Promise.all(accounts.map(async (account) => ({ ...account, passwordHash: await hashPassword(account.password) })));
+
+  return prisma.$transaction(async (tx) => {
+    if (options.singleUseMarker) {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(1279742544)`;
+      const completed = await tx.auditLog.findFirst({
+        where: { action: "PRIVILEGED_STAGING_STARTUP_COMPLETED", entityType: "System", entityId: options.singleUseMarker },
+        select: { id: true }
+      });
+      if (completed) return { status: "already-completed", count: 0 };
+    }
+
+    const existing = await tx.user.findMany({
+      where: { OR: accounts.flatMap((account) => [{ phone: account.phone }, { email: account.email }]) },
+      select: { id: true }
+    });
+    if (existing.length) throw new Error("Provisioning stopped because one or more phone numbers or emails already exist; existing accounts are never overwritten");
+
+    for (const account of preparedAccounts) {
+      const user = await tx.user.create({
+        data: {
+          phone: account.phone,
+          email: account.email,
+          emailVerifiedAt: new Date(),
+          passwordHash: account.passwordHash,
+          firstName: account.firstName,
+          lastName: account.lastName,
+          role: account.role,
+          status: "ACTIVE"
+        }
+      });
+      if (account.role === "FLEET_MANAGER") await tx.fleet.create({ data: { name: account.organisationName!, managerId: user.id } });
+      if (account.role === "BUSINESS_MANAGER") {
+        await tx.corporateAccount.create({ data: { name: account.organisationName!, billingEmail: account.email, managerId: user.id, monthlyBudgetMinor: 0 } });
+      }
+      await tx.auditLog.create({
+        data: {
+          action: "PRIVILEGED_STAGING_ACCOUNT_PROVISIONED",
+          entityType: "User",
+          entityId: user.id,
+          metadata: { role: account.role, source: options.singleUseMarker ? "single-use-startup" : "one-time-provisioning" }
+        }
+      });
+    }
+
+    if (options.singleUseMarker) {
+      await tx.auditLog.create({
+        data: {
+          action: "PRIVILEGED_STAGING_STARTUP_COMPLETED",
+          entityType: "System",
+          entityId: options.singleUseMarker,
+          metadata: { accountCount: accounts.length }
+        }
+      });
+    }
+    return { status: "provisioned", count: accounts.length };
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+}
+
+export function consumeStartupProvisioningEnvironment(environment: NodeJS.ProcessEnv) {
+  const confirmation = environment.PRIVILEGED_PROVISIONING_CONFIRM;
+  const rawAccounts = environment.PRIVILEGED_ACCOUNTS_JSON;
+  delete environment.PRIVILEGED_PROVISIONING_CONFIRM;
+  delete environment.PRIVILEGED_ACCOUNTS_JSON;
+
+  if (!confirmation && !rawAccounts) return null;
+  if (confirmation !== PRIVILEGED_PROVISIONING_CONFIRMATION || !rawAccounts) {
+    throw new Error("Privileged startup provisioning is incomplete or unauthorized");
+  }
+  return rawAccounts;
 }
