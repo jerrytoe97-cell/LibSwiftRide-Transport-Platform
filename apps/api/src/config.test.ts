@@ -36,6 +36,22 @@ describe("production environment safeguards", () => {
     })).toThrow("Invalid environment");
   });
 
+  it("requires complete protected email configuration when production delivery is enabled", () => {
+    expect(() => parseEnvironment({ ...production, NOTIFICATION_PROVIDER: "hooks", EMAIL_PROVIDER: "resend" })).toThrow("Invalid environment");
+    expect(parseEnvironment({
+      ...production,
+      NOTIFICATION_PROVIDER: "hooks",
+      EMAIL_PROVIDER: "resend",
+      EMAIL_FROM: "support@libswiftride.example",
+      RESEND_API_KEY: "resend-key-with-at-least-32-characters"
+    })).toMatchObject({ NOTIFICATION_PROVIDER: "hooks", EMAIL_PROVIDER: "resend" });
+    expect(() => parseEnvironment({
+      ...production,
+      NOTIFICATION_PROVIDER: "hooks",
+      EMAIL_PROVIDER: "hooks"
+    })).toThrow("Invalid environment");
+  });
+
   it.each([
     ["wildcard CORS", { CORS_ORIGINS: "*" }],
     ["non-TLS CORS", { CORS_ORIGINS: "http://passenger.example.com" }],

@@ -305,7 +305,7 @@ api.post("/auth/password-reset/request", asyncRoute(async (req, res) => {
   const user = await prisma.user.findUnique({ where: { email } });
   if (user) {
     const token = await createVerificationToken(user.id, "PASSWORD_RESET");
-    await queueNotification({ userId: user.id, channel: "EMAIL", template: "password-reset", title: "Reset your LibSwiftRide password", body: `Reset token: ${token}` });
+    await queueNotification({ userId: user.id, channel: "EMAIL", template: "password-reset", title: "Reset your LibSwiftRide password", body: `Your one-time LibSwiftRide password reset token is: ${token}\n\nIt expires in one hour. If you did not request this reset, you can ignore this email.` });
   }
   res.status(202).json({ data: { accepted: true } });
 }));

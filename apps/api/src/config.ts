@@ -29,6 +29,9 @@ export const environmentSchema = z.object({
   PAYMENT_PROVIDER: z.enum(["sandbox", "mobile-money"]).default("sandbox"),
   PAYMENT_WEBHOOK_SECRET: z.string().min(16),
   NOTIFICATION_PROVIDER: z.enum(["sandbox", "hooks"]).default("sandbox"),
+  EMAIL_PROVIDER: z.enum(["hooks", "resend"]).default("hooks"),
+  EMAIL_FROM: z.preprocess((value) => value === "" ? undefined : value, z.email().optional()),
+  RESEND_API_KEY: optionalSecret,
   ORANGE_MONEY_API_URL: optionalUrl,
   ORANGE_MONEY_API_TOKEN: optionalSecret,
   ORANGE_MONEY_NUMBER: optionalMobileMoneyNumber,
@@ -54,6 +57,14 @@ export const environmentSchema = z.object({
   if (environment.NODE_ENV === "production" && !environment.MFA_ENCRYPTION_KEY) {
     context.addIssue({ code: "custom", path: ["MFA_ENCRYPTION_KEY"], message: "MFA_ENCRYPTION_KEY is required in production" });
   }
+  if (environment.NODE_ENV === "production" && environment.NOTIFICATION_PROVIDER === "hooks") {
+    if (environment.EMAIL_PROVIDER === "hooks" && (!environment.EMAIL_DELIVERY_URL || !environment.EMAIL_DELIVERY_TOKEN)) {
+      context.addIssue({ code: "custom", path: ["EMAIL_DELIVERY_URL"], message: "EMAIL_DELIVERY_URL and EMAIL_DELIVERY_TOKEN are required for hook email delivery" });
+    }
+    if (environment.EMAIL_PROVIDER === "resend" && (!environment.RESEND_API_KEY || !environment.EMAIL_FROM)) {
+      context.addIssue({ code: "custom", path: ["RESEND_API_KEY"], message: "RESEND_API_KEY and EMAIL_FROM are required for Resend email delivery" });
+    }
+  }
   if (environment.NODE_ENV === "production" && environment.PAYMENTS_ENABLED && environment.PAYMENT_PROVIDER !== "mobile-money") {
     context.addIssue({ code: "custom", path: ["PAYMENT_PROVIDER"], message: "Production payments require PAYMENT_PROVIDER=mobile-money" });
   }
@@ -74,7 +85,7 @@ export const environmentSchema = z.object({
     if (environment.ROUTING_PROVIDER === "mapbox" && !environment.MAPBOX_ROUTING_TOKEN) {
       context.addIssue({ code: "custom", path: ["MAPBOX_ROUTING_TOKEN"], message: "MAPBOX_ROUTING_TOKEN is required when ROUTING_PROVIDER=mapbox" });
     }
-    for (const [field, secret] of [["JWT_ACCESS_SECRET", environment.JWT_ACCESS_SECRET], ["JWT_REFRESH_SECRET", environment.JWT_REFRESH_SECRET], ["PAYMENT_WEBHOOK_SECRET", environment.PAYMENT_WEBHOOK_SECRET], ["MFA_ENCRYPTION_KEY", environment.MFA_ENCRYPTION_KEY ?? ""]] as const) {
+    for (const [field, secret] of [["JWT_ACCESS_SECRET", environment.JWT_ACCESS_SECRET], ["JWT_REFRESH_SECRET", environment.JWT_REFRESH_SECRET], ["PAYMENT_WEBHOOK_SECRET", environment.PAYMENT_WEBHOOK_SECRET], ["MFA_ENCRYPTION_KEY", environment.MFA_ENCRYPTION_KEY ?? ""], ["RESEND_API_KEY", environment.RESEND_API_KEY ?? ""]] as const) {
       if (/replace|example|change|development|test-secret/i.test(secret)) {
         context.addIssue({ code: "custom", path: [field], message: `${field} contains a placeholder value` });
       }

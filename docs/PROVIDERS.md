@@ -37,3 +37,11 @@ Delivery hooks accept authenticated POST requests containing notification ID, ch
 - Push destinations come from active registered devices.
 
 Production delivery hooks must suppress secrets in logs, sign callbacks, implement retry/backoff and expose delivery receipts. Failed database notification rows are visible to operations for replay.
+
+### Password-reset email delivery
+
+Production-equivalent deployments default to `NOTIFICATION_PROVIDER=sandbox`, which deliberately sends no external email. To use the existing authenticated webhook adapter, set `NOTIFICATION_PROVIDER=hooks`, `EMAIL_PROVIDER=hooks`, `EMAIL_DELIVERY_URL` and `EMAIL_DELIVERY_TOKEN` in the deployment secret manager.
+
+Alternatively, the API includes an opt-in direct Resend HTTPS adapter. Set `NOTIFICATION_PROVIDER=hooks`, `EMAIL_PROVIDER=resend`, `EMAIL_FROM` to an address on a verified sending domain, and `RESEND_API_KEY` to a restricted protected API key. The API sends plain-text email through `https://api.resend.com/emails` with bearer authentication and the notification ID as the idempotency key. Do not place provider keys in source, frontend variables, logs or screenshots. Provider activation, domain verification, pricing approval and test-recipient evidence remain deployment-owner actions.
+
+Password-reset requests remain enumeration-safe and return `202` whether an account exists or not. A newly issued 64-character token invalidates earlier unused reset tokens, is stored only as a SHA-256 hash, expires after one hour, and revokes all refresh sessions when consumed. Notification bodies and provider requests must never be logged.

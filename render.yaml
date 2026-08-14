@@ -50,6 +50,14 @@ services:
         generateValue: true
       - key: PAYMENTS_ENABLED
         value: "false"
+      - key: NOTIFICATION_PROVIDER
+        value: sandbox
+      - key: EMAIL_PROVIDER
+        value: hooks
+      - key: EMAIL_FROM
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
       - key: PAYMENT_PROVIDER
         value: sandbox
       - key: ORANGE_MONEY_NUMBER
