@@ -118,7 +118,7 @@ function Footer() {
 }
 
 function Layout({ children }: { children: ReactNode }) {
-  return <><a className="skip-link" href="#content">Skip to content</a><Header /><main id="content">{children}</main><Footer /></>;
+  return <><a className="skip-link" href="#main-content">Skip to main content</a><Header /><main id="main-content" tabIndex={-1}>{children}</main><Footer /></>;
 }
 
 function Eyebrow({ children }: { children: ReactNode }) { return <span className="eyebrow">{children}</span>; }
