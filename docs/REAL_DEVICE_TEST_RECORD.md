@@ -2,6 +2,22 @@
 
 Use one copy per approved immutable staging commit. Keep payments disabled and use only fictional accounts, vehicles, KYC references and routes. Do not record credentials, tokens, government IDs or precise location history.
 
+## Automated staging preflight — 2026-08-14
+
+- Verified commit: `046e4e75e780f676efbb9028e29ee48ffd09ad0f`
+- GitHub CI: PASS ([run 31758294242](https://github.com/jerrytoe97-cell/LibSwiftRide-Transport-Platform/actions/runs/31758294242))
+- Container build: PASS in the same CI run
+- Lint, typecheck and production builds: PASS for all workspaces
+- Tests: PASS — API 82, SDK 8, Driver location runtime 7; database-backed passenger-to-driver lifecycle and staff MFA acceptance included
+- Isolated PostgreSQL dump/restore/reconciliation: PASS; completed-ride allocation and wallet-balance violations both zero
+- Desktop/mobile staging browser gate: PASS — 35 passed, one expected desktop skip ([run 31758294243](https://github.com/jerrytoe97-cell/LibSwiftRide-Transport-Platform/actions/runs/31758294243))
+- API `/health/live` and `/health/ready`: HTTP 200
+- Public website, Passenger, Driver, Admin, Dispatcher, Fleet Manager and Business Manager staging documents: HTTP 200
+- Automated offline recovery checks: PASS for Passenger and Driver foreground web sessions
+- Physical Passenger/Driver device lifecycle, foreground movement, background suspension behavior, OS permission prompts, notification delivery and SOS operations receipt: **PENDING — do not mark PASS until observed on real devices**
+
+This preflight used only the isolated CI PostgreSQL service for the recovery drill. It did not alter staging or production databases, enable payments, or activate paid notification/map providers.
+
 ## Release identity
 
 - Commit SHA:
