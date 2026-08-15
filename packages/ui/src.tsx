@@ -328,7 +328,7 @@ function AuthenticationPanel({ product, role, onAuthenticated, onDemo }: { produ
       </>}
       {(mode === "login" || mode === "register") && <>
       {mode === "register" && <div className="form-row"><label>First name<input name="firstName" autoComplete="given-name" required maxLength={80} /></label><label>Last name<input name="lastName" autoComplete="family-name" required maxLength={80} /></label></div>}
-      <label>Mobile number<input name="phone" type="tel" autoComplete="tel" required minLength={8} maxLength={20} placeholder="e.g. 0770000000" /></label>
+      <label>{mode === "login" ? "Mobile number or email" : "Mobile number"}<input name="phone" type={mode === "login" ? "text" : "tel"} autoComplete={mode === "login" ? "username" : "tel"} required minLength={8} maxLength={254} placeholder={mode === "login" ? "e.g. 0770000000 or name@example.com" : "e.g. 0770000000"} /></label>
       {mode === "register" && <p className="verification-hint"><strong>Phone verification</strong><span>We will send a one-time code after account creation. Never share this code with a driver or support agent.</span></p>}
       {mode === "register" && <label>Email address<input name="email" type="email" autoComplete="email" /></label>}
       {mode === "register" && role === "PASSENGER" && <>

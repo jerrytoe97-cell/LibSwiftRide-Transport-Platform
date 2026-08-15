@@ -121,13 +121,19 @@ api.patch("/users/me/preferences", authenticate, asyncRoute(async (req, res) => 
 
 api.post("/auth/login", asyncRoute(async (req, res) => {
   const input = z.object({ phone: z.string(), password: z.string() }).parse(req.body);
-  let phoneCandidates: string[];
-  try { phoneCandidates = liberianPhoneLookupCandidates(input.phone); }
-  catch { return res.status(401).json({ error: { code: "INVALID_CREDENTIALS", message: "Phone or password is incorrect" } }); }
-  const matchingUsers = await prisma.user.findMany({ where: { phone: { in: phoneCandidates } }, take: 2 });
+  const identifier = input.phone.trim();
+  let matchingUsers;
+  if (identifier.includes("@")) {
+    matchingUsers = await prisma.user.findMany({ where: { email: { equals: identifier, mode: "insensitive" } }, take: 2 });
+  } else {
+    let phoneCandidates: string[];
+    try { phoneCandidates = liberianPhoneLookupCandidates(identifier); }
+    catch { return res.status(401).json({ error: { code: "INVALID_CREDENTIALS", message: "Phone, email, or password is incorrect" } }); }
+    matchingUsers = await prisma.user.findMany({ where: { phone: { in: phoneCandidates } }, take: 2 });
+  }
   const user = await selectAuthenticatedIdentity(matchingUsers, input.password, verifyPassword);
   if (!user) {
-    return res.status(401).json({ error: { code: "INVALID_CREDENTIALS", message: "Phone or password is incorrect" } });
+    return res.status(401).json({ error: { code: "INVALID_CREDENTIALS", message: "Phone, email, or password is incorrect" } });
   }
   if (requiresMfa(user.role)) {
     const credential = await prisma.mfaCredential.findUnique({ where: { userId: user.id }, select: { verifiedAt: true } });
