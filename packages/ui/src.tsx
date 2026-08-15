@@ -228,6 +228,12 @@ function AuthenticationPanel({ product, role, onAuthenticated, onDemo }: { produ
   const [rememberMfa, setRememberMfa] = useState(true);
   const [mfaSetup, setMfaSetup] = useState<{ secret: string; provisioningUri: string; recoveryCodes: string[] } | null>(null);
 
+  function requireStrongPassword(password: string) {
+    if (password.length < 16 || !/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/[0-9]/.test(password) || !/[^A-Za-z0-9]/.test(password)) {
+      throw new Error("Password must have at least 16 characters, including uppercase, lowercase, a number, and a symbol.");
+    }
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
@@ -242,6 +248,7 @@ function AuthenticationPanel({ product, role, onAuthenticated, onDemo }: { produ
       }
       if (mode === "reset") {
         const password = String(data.get("password") ?? "");
+        requireStrongPassword(password);
         if (password !== String(data.get("passwordConfirmation") ?? "")) throw new Error("The new passwords do not match.");
         await apiClient.request("/auth/password-reset/confirm", { method: "POST", body: JSON.stringify({ token: String(data.get("token") ?? "").trim(), password }), skipAuthRefresh: true });
         setNotice("Your password has been reset and all previous sessions were signed out. Sign in with your new password.");
@@ -266,6 +273,7 @@ function AuthenticationPanel({ product, role, onAuthenticated, onDemo }: { produ
       }
       if (mode === "register") {
         const email = String(data.get("email") ?? "");
+        requireStrongPassword(String(data.get("password") ?? ""));
         await apiClient.register({
           phone: String(data.get("phone") ?? ""),
           password: String(data.get("password") ?? ""),
@@ -344,7 +352,8 @@ function AuthenticationPanel({ product, role, onAuthenticated, onDemo }: { produ
         </fieldset>
         <p className="privacy-hint">Profile photos and saved places are completed after verification so they can use protected upload and location services.</p>
       </>}
-      <label>Password<input name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} required minLength={12} maxLength={128} /></label>
+      <label>Password<input name="password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} required minLength={mode === "login" ? 12 : 16} maxLength={128} /></label>
+      {mode === "register" && <p className="privacy-hint">Use at least 16 characters with uppercase, lowercase, a number, and a symbol.</p>}
       <label className="check-row"><input name="remember" type="checkbox" defaultChecked /> Keep me signed in on this device</label>
       </>}
       {error && <p className="notice error" role="alert">{error}</p>}
