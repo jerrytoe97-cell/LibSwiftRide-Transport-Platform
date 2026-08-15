@@ -20,6 +20,7 @@ import { distanceMetres, estimateEtaSeconds } from "./services/tracking.js";
 import { queueDocumentExpiryReminders } from "./services/document-reminders.js";
 import { decodeRideRealtimeEvent, publishRideRealtimeEvent, RIDE_REALTIME_CHANNEL } from "./services/ride-realtime.js";
 import { loadOpenApiYaml } from "./services/openapi.js";
+import { validationErrorMessage } from "./services/validation.js";
 import { purgeExpiredRoutePoints } from "./services/location-retention.js";
 import { consumeStartupProvisioningEnvironment, provisionPrivilegedAccounts, STARTUP_PROVISIONING_MARKER } from "./services/privileged-provisioning.js";
 
@@ -88,7 +89,7 @@ app.use("/api/v1", api);
 app.use((_req, res) => res.status(404).json({ error: { code: "NOT_FOUND", message: "Route not found" } }));
 app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
   req.log.error({ err: error }, "request failed");
-  if (error instanceof ZodError) return res.status(422).json({ error: { code: "VALIDATION_ERROR", message: "Request validation failed", details: error.issues } });
+  if (error instanceof ZodError) return res.status(422).json({ error: { code: "VALIDATION_ERROR", message: validationErrorMessage(error), details: error.issues } });
   if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
     return res.status(409).json({
       error: {
