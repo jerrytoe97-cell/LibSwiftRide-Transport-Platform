@@ -47,7 +47,10 @@ export function parsePrivilegedAccounts(raw: string): PrivilegedAccountInput[] {
 }
 
 export const PRIVILEGED_PROVISIONING_CONFIRMATION = "PROVISION_STAGING_PRIVILEGED_ACCOUNTS";
-export const STARTUP_PROVISIONING_MARKER = "privileged-staging-startup-v1";
+// Each explicitly approved staging bootstrap gets a new permanent audit marker.
+// v1 was consumed by the initial owner-account attempt; v2 is reserved for the
+// separately identified Admin account approved on 2026-08-15.
+export const STARTUP_PROVISIONING_MARKER = "privileged-staging-startup-v2";
 
 type ProvisioningResult = { status: "provisioned"; count: number } | { status: "already-completed"; count: 0 };
 
