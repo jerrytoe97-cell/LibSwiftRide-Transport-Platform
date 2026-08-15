@@ -19,7 +19,7 @@ import { referralRewardFor } from "./services/referrals.js";
 import { fraudAction, fraudScore, incentiveQualified, zoneMultiplierFor } from "./services/phase5.js";
 import { calculateRoadRoute, RoutingError } from "./services/routing.js";
 import { decryptMfaSecret, encryptMfaSecret, generateMfaSecret, generateRecoveryCodes, provisioningUri, recoveryCodeHash, requiresMfa, verifyTotp } from "./services/mfa.js";
-import { liberianPhoneLookupCandidates, normalizeLiberianPhone, strongPasswordSchema } from "./services/identity.js";
+import { liberianPhoneLookupCandidates, normalizeLiberianPhone, selectAuthenticatedIdentity, strongPasswordSchema } from "./services/identity.js";
 
 export const api = Router();
 const asyncRoute = (handler: (req: any, res: any) => Promise<unknown>) =>
@@ -125,8 +125,8 @@ api.post("/auth/login", asyncRoute(async (req, res) => {
   try { phoneCandidates = liberianPhoneLookupCandidates(input.phone); }
   catch { return res.status(401).json({ error: { code: "INVALID_CREDENTIALS", message: "Phone or password is incorrect" } }); }
   const matchingUsers = await prisma.user.findMany({ where: { phone: { in: phoneCandidates } }, take: 2 });
-  const user = matchingUsers.length === 1 ? matchingUsers[0] : null;
-  if (!user || user.status !== "ACTIVE" || !(await verifyPassword(user.passwordHash, input.password))) {
+  const user = await selectAuthenticatedIdentity(matchingUsers, input.password, verifyPassword);
+  if (!user) {
     return res.status(401).json({ error: { code: "INVALID_CREDENTIALS", message: "Phone or password is incorrect" } });
   }
   if (requiresMfa(user.role)) {
