@@ -7,6 +7,7 @@ describe("privileged account provisioning input", () => {
   it("accepts approved roles and normalizes email without exposing the password", () => {
     const account = parsePrivilegedAccounts(JSON.stringify([validAccount]))[0]!;
     expect(account.email).toBe("admin.staging@example.com");
+    expect(account.phone).toBe("+231770000001");
     expect(account.role).toBe("ADMIN");
   });
 
@@ -15,6 +16,7 @@ describe("privileged account provisioning input", () => {
     expect(() => parsePrivilegedAccounts(JSON.stringify([{ ...validAccount, password: "too-short" }]))).toThrow();
     expect(() => parsePrivilegedAccounts(JSON.stringify([validAccount, validAccount]))).toThrow();
     expect(() => parsePrivilegedAccounts(JSON.stringify([{ ...validAccount, role: "FLEET_MANAGER" }]))).toThrow();
+    expect(parsePrivilegedAccounts(JSON.stringify([{ ...validAccount, phone: "0770000001" }]))[0]!.phone).toBe("+231770000001");
   });
 
   it("consumes startup credentials and fails closed for partial or unauthorized configuration", () => {

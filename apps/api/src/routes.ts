@@ -19,15 +19,19 @@ import { referralRewardFor } from "./services/referrals.js";
 import { fraudAction, fraudScore, incentiveQualified, zoneMultiplierFor } from "./services/phase5.js";
 import { calculateRoadRoute, RoutingError } from "./services/routing.js";
 import { decryptMfaSecret, encryptMfaSecret, generateMfaSecret, generateRecoveryCodes, provisioningUri, recoveryCodeHash, requiresMfa, verifyTotp } from "./services/mfa.js";
+import { liberianPhoneLookupCandidates, normalizeLiberianPhone, strongPasswordSchema } from "./services/identity.js";
 
 export const api = Router();
 const asyncRoute = (handler: (req: any, res: any) => Promise<unknown>) =>
   (req: any, res: any, next: any) => Promise.resolve(handler(req, res)).catch(next);
 
 const registration = z.object({
-  phone: z.string().min(8).max(20),
+  phone: z.string().transform((value, context) => {
+    try { return normalizeLiberianPhone(value); }
+    catch (error) { context.addIssue({ code: "custom", message: error instanceof Error ? error.message : "Invalid phone" }); return z.NEVER; }
+  }),
   email: z.email().optional(),
-  password: z.string().min(12).max(128),
+  password: strongPasswordSchema,
   firstName: z.string().min(1).max(80),
   lastName: z.string().min(1).max(80),
   role: z.enum(["PASSENGER", "DRIVER"]),
@@ -37,6 +41,8 @@ const registration = z.object({
 api.post("/auth/register", asyncRoute(async (req, res) => {
   const input = registration.parse(req.body);
   const { password, email, referralCode, ...profile } = input;
+  const existingPhone = await prisma.user.findFirst({ where: { phone: { in: liberianPhoneLookupCandidates(profile.phone) } }, select: { id: true } });
+  if (existingPhone) return res.status(409).json({ error: { code: "ACCOUNT_EXISTS", message: "An account already exists with this phone number or email address. Sign in instead." } });
   const referrer = referralCode ? await prisma.user.findUnique({ where: { referralCode }, select: { id: true } }) : null;
   if (referralCode && !referrer) return res.status(422).json({ error: { code: "INVALID_REFERRAL", message: "Referral code is invalid" } });
   const passwordHash = await hashPassword(password);
@@ -115,7 +121,11 @@ api.patch("/users/me/preferences", authenticate, asyncRoute(async (req, res) => 
 
 api.post("/auth/login", asyncRoute(async (req, res) => {
   const input = z.object({ phone: z.string(), password: z.string() }).parse(req.body);
-  const user = await prisma.user.findUnique({ where: { phone: input.phone } });
+  let phoneCandidates: string[];
+  try { phoneCandidates = liberianPhoneLookupCandidates(input.phone); }
+  catch { return res.status(401).json({ error: { code: "INVALID_CREDENTIALS", message: "Phone or password is incorrect" } }); }
+  const matchingUsers = await prisma.user.findMany({ where: { phone: { in: phoneCandidates } }, take: 2 });
+  const user = matchingUsers.length === 1 ? matchingUsers[0] : null;
   if (!user || user.status !== "ACTIVE" || !(await verifyPassword(user.passwordHash, input.password))) {
     return res.status(401).json({ error: { code: "INVALID_CREDENTIALS", message: "Phone or password is incorrect" } });
   }
@@ -311,7 +321,7 @@ api.post("/auth/password-reset/request", asyncRoute(async (req, res) => {
 }));
 
 api.post("/auth/password-reset/confirm", asyncRoute(async (req, res) => {
-  const input = z.object({ token: z.string().min(32), password: z.string().min(12).max(128) }).parse(req.body);
+  const input = z.object({ token: z.string().min(32), password: strongPasswordSchema }).parse(req.body);
   const record = await prisma.verificationToken.findUnique({ where: { tokenHash: tokenDigest(input.token) } });
   if (!record || record.type !== "PASSWORD_RESET" || record.usedAt || record.expiresAt < new Date()) return res.status(400).json({ error: { code: "INVALID_TOKEN", message: "Reset token is invalid or expired" } });
   await prisma.$transaction([

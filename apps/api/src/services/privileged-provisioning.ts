@@ -1,19 +1,17 @@
 import { z } from "zod";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { hashPassword } from "../auth.js";
+import { liberianPhoneLookupCandidates, normalizeLiberianPhone, strongPasswordSchema } from "./identity.js";
 
 export const privilegedRoles = ["ADMIN", "DISPATCHER", "FLEET_MANAGER", "BUSINESS_MANAGER"] as const;
 
-const strongPassword = z.string().min(16).max(128)
-  .regex(/[a-z]/, "Password must contain a lowercase letter")
-  .regex(/[A-Z]/, "Password must contain an uppercase letter")
-  .regex(/[0-9]/, "Password must contain a number")
-  .regex(/[^A-Za-z0-9]/, "Password must contain a symbol");
-
 const accountSchema = z.object({
-  phone: z.string().trim().min(8).max(20),
+  phone: z.string().transform((value, context) => {
+    try { return normalizeLiberianPhone(value); }
+    catch (error) { context.addIssue({ code: "custom", message: error instanceof Error ? error.message : "Invalid phone" }); return z.NEVER; }
+  }),
   email: z.string().trim().email(),
-  password: strongPassword,
+  password: strongPasswordSchema,
   firstName: z.string().trim().min(1).max(80),
   lastName: z.string().trim().min(1).max(80),
   role: z.enum(privilegedRoles),
@@ -72,7 +70,7 @@ export async function provisionPrivilegedAccounts(
     }
 
     const existing = await tx.user.findMany({
-      where: { OR: accounts.flatMap((account) => [{ phone: account.phone }, { email: account.email }]) },
+      where: { OR: accounts.flatMap((account) => [...liberianPhoneLookupCandidates(account.phone).map((phone) => ({ phone })), { email: account.email }]) },
       select: { id: true }
     });
     if (existing.length) throw new Error("Provisioning stopped because one or more phone numbers or emails already exist; existing accounts are never overwritten");

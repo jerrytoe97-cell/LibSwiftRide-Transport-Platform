@@ -320,7 +320,7 @@ function AuthenticationPanel({ product, role, onAuthenticated, onDemo }: { produ
     <form className="auth-card" onSubmit={submit}>
       {notice && <p className="notice" role="status">{notice}</p>}
       {mode === "forgot" && <label>Email address<input name="email" type="email" autoComplete="email" required /></label>}
-      {mode === "reset" && <><label>Reset token<input name="token" autoComplete="one-time-code" required minLength={32} /></label><label>New password<input name="password" type="password" autoComplete="new-password" required minLength={12} maxLength={128} /></label><label>Confirm new password<input name="passwordConfirmation" type="password" autoComplete="new-password" required minLength={12} maxLength={128} /></label></>}
+      {mode === "reset" && <><label>Reset token<input name="token" autoComplete="one-time-code" required minLength={32} /></label><label>New password<input name="password" type="password" autoComplete="new-password" required minLength={16} maxLength={128} /></label><label>Confirm new password<input name="passwordConfirmation" type="password" autoComplete="new-password" required minLength={16} maxLength={128} /></label></>}
       {mode === "mfa" && <label>Authenticator or recovery code<input name="code" autoComplete="one-time-code" required minLength={6} maxLength={20} autoFocus /></label>}
       {mode === "mfa-enroll" && <>{!mfaSetup
         ? <p className="privacy-hint">Continue to generate a private authenticator secret and eight one-time recovery codes. Setup expires in five minutes.</p>
