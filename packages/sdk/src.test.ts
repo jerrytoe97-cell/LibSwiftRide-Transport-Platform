@@ -53,3 +53,16 @@ describe("SDK", () => {
     expect(fetchMock).toHaveBeenCalledWith("http://localhost:4000/api/v1/auth/register", expect.any(Object));
   });
 });
+
+describe("role-bound login", () => {
+  it("rejects a valid account from the wrong portal before storing its session", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      data: { id: "driver-id", role: "DRIVER" },
+      tokens: { accessToken: "access-token", refreshToken: "refresh-token" }
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+
+    await expect(new LibSwiftRideClient().login("0770000000", "private-password", true, "PASSENGER"))
+      .rejects.toMatchObject({ code: "WRONG_PORTAL", status: 403 });
+    vi.unstubAllGlobals();
+  });
+});

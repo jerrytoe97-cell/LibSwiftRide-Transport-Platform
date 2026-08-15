@@ -296,7 +296,7 @@ function AuthenticationPanel({ product, role, onAuthenticated, onDemo }: { produ
         }
       } else {
         const persistent = data.get("remember") === "on";
-        const login = await apiClient.login(String(data.get("phone") ?? ""), String(data.get("password") ?? ""), persistent);
+        const login = await apiClient.login(String(data.get("phone") ?? ""), String(data.get("password") ?? ""), persistent, role);
         if (login.mfaRequired && login.challengeToken) {
           setMfaToken(login.challengeToken); setRememberMfa(persistent); setMode("mfa");
           setNotice("Enter the current code from your authenticator app, or use one unused recovery code.");

@@ -74,8 +74,11 @@ export class LibSwiftRideClient {
     return Boolean(this.accessToken || storedToken(refreshTokenKey));
   }
 
-  async login(phone: string, password: string, persistent = true) {
+  async login(phone: string, password: string, persistent = true, expectedRole?: string) {
     const result = await this.request<LoginResult>("/auth/login", { method: "POST", body: JSON.stringify({ phone, password }), skipAuthRefresh: true });
+    if (expectedRole && result.data.role !== expectedRole) {
+      throw new ApiRequestError("WRONG_PORTAL", `This account cannot access the ${expectedRole.toLowerCase().replaceAll("_", " ")} portal.`, 403);
+    }
     if (result.tokens) this.setSession(result.tokens, persistent);
     return result;
   }
