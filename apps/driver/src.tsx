@@ -63,17 +63,17 @@ function App() {
 
   async function uploadKycDocument(type: KycDocumentType, file: File | undefined) {
     if (!file || !kycUploadConfig) return;
-    if (!fictionalConfirmed) return setMessage("Confirm that this is a fictional staging document before uploading.");
+    if (kycUploadConfig.fictionalOnly && !fictionalConfirmed) return setMessage("Confirm that this is a fictional staging document before uploading.");
     if (!kycUploadConfig.mimeTypes.includes(file.type)) return setMessage("Choose a JPEG, PNG, or PDF file.");
     if (file.size > kycUploadConfig.maxBytes) return setMessage(`File must be ${Math.floor(kycUploadConfig.maxBytes / 1024 / 1024)} MB or smaller.`);
     setUploadingType(type); setMessage(`Securely uploading ${file.name}…`);
     try {
       const checksum = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()))).map((byte) => byte.toString(16).padStart(2, "0")).join("");
-      const intent = await apiClient.request<{ data: { storageKey: string; uploadUrl: string; requiredHeaders: Record<string, string> } }>("/drivers/kyc/uploads", { method: "POST", body: JSON.stringify({ type, mimeType: file.type, sizeBytes: file.size, fictionalDocument: true }) });
+      const intent = await apiClient.request<{ data: { storageKey: string; uploadUrl: string; requiredHeaders: Record<string, string> } }>("/drivers/kyc/uploads", { method: "POST", body: JSON.stringify({ type, mimeType: file.type, sizeBytes: file.size, fictionalDocument: kycUploadConfig.fictionalOnly }) });
       const uploaded = await fetch(intent.data.uploadUrl, { method: "PUT", headers: intent.data.requiredHeaders, body: file });
       if (!uploaded.ok) throw new Error("Private storage rejected the upload. Check bucket CORS and try again.");
       await apiClient.request("/drivers/kyc/uploads/complete", { method: "POST", body: JSON.stringify({ type, storageKey: intent.data.storageKey, mimeType: file.type, sizeBytes: file.size, checksum }) });
-      setMessage(`${file.name} uploaded and passed staging security scanning.`);
+      setMessage(`${file.name} uploaded and passed security scanning.`);
       await load();
     } catch (error) { setMessage((error as Error).message); }
     finally { setUploadingType(null); }
@@ -294,7 +294,7 @@ function App() {
         {onboarding.kycCase?.rejectionNotes && <p className="notice error">{onboarding.kycCase.rejectionNotes}</p>}
         {!kycUploadConfig?.enabled && <p className="notice error">Private document storage and scanning are not configured. Upload is safely disabled.</p>}
         {kycUploadConfig?.fictionalOnly && <p className="notice"><strong>Staging test only:</strong> upload fictional documents containing no real identity, licence, insurance, address, or vehicle information.</p>}
-        <label className="consent-row"><input type="checkbox" checked={fictionalConfirmed} onChange={(event) => setFictionalConfirmed(event.target.checked)} /> I confirm every file is fictional test data.</label>
+        {kycUploadConfig?.fictionalOnly && <label className="consent-row"><input type="checkbox" checked={fictionalConfirmed} onChange={(event) => setFictionalConfirmed(event.target.checked)} /> I confirm every file is fictional test data.</label>}
         <div className="kyc-upload-grid">
           {([[
             "DRIVER_LICENSE", "Driver licence", "Photograph or select a fictional driver licence.", undefined
@@ -311,12 +311,12 @@ function App() {
             return <label className="kyc-upload-card" key={type}>
               <strong>{label}</strong><span>{help}</span>
               <small>{document?.scanStatus === "CLEAN" ? `Security scan passed · ${Math.ceil(document.sizeBytes / 1024)} KB` : "Required · JPEG, PNG, or PDF"}</small>
-              <input type="file" accept={kycUploadConfig?.mimeTypes.join(",") ?? "image/jpeg,image/png,application/pdf"} capture={capture} disabled={!kycUploadConfig?.enabled || !fictionalConfirmed || uploadingType !== null || onboarding.kycCase?.status === "SUBMITTED"} onChange={(event) => { void uploadKycDocument(type, event.target.files?.[0]); event.currentTarget.value = ""; }} />
+              <input type="file" accept={kycUploadConfig?.mimeTypes.join(",") ?? "image/jpeg,image/png,application/pdf"} capture={capture} disabled={!kycUploadConfig?.enabled || (kycUploadConfig.fictionalOnly && !fictionalConfirmed) || uploadingType !== null || ["SUBMITTED", "UNDER_REVIEW", "APPROVED"].includes(onboarding.kycCase?.status ?? "")} onChange={(event) => { void uploadKycDocument(type, event.target.files?.[0]); event.currentTarget.value = ""; }} />
               {uploadingType === type && <span role="status">Uploading and scanning…</span>}
             </label>;
           })}
         </div>
-        <Action disabled={onboarding.kycCase?.status === "SUBMITTED" || uploadingType !== null || !(["DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "PROFILE_PHOTO"] as const).every((type) => onboarding.kycCase?.documents.some((document) => document.type === type && document.scanStatus === "CLEAN"))} onClick={submitKyc}>Submit for Admin review</Action>
+        <Action disabled={["SUBMITTED", "UNDER_REVIEW", "APPROVED"].includes(onboarding.kycCase?.status ?? "") || uploadingType !== null || !(["DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "PROFILE_PHOTO"] as const).every((type) => onboarding.kycCase?.documents.some((document) => document.type === type && document.scanStatus === "CLEAN"))} onClick={submitKyc}>Submit for Admin review</Action>
       </section>}
       <div hidden={onboarding === null}>
       {incomingRide && <section className="incoming-ride" aria-live="assertive">

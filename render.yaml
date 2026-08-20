@@ -58,14 +58,36 @@ services:
         value: "true"
       - key: KYC_UPLOAD_MAX_BYTES
         value: "5242880"
+      - key: KYC_S3_ENDPOINT
+        sync: false
+      - key: KYC_S3_REGION
+        sync: false
+      - key: KYC_S3_BUCKET
+        sync: false
+      - key: KYC_S3_ACCESS_KEY_ID
+        sync: false
+      - key: KYC_S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: KYC_S3_FORCE_PATH_STYLE
+        value: "false"
+      - key: KYC_S3_SERVER_SIDE_ENCRYPTION
+        value: provider
+      - key: KYC_S3_KMS_KEY_ID
+        sync: false
+      - key: KYC_SCANNER_URL
+        sync: false
+      - key: KYC_SCANNER_TOKEN
+        sync: false
+      - key: KYC_SCANNER_TIMEOUT_MS
+        value: "10000"
       - key: NOTIFICATION_PROVIDER
-        value: sandbox
-      - key: EMAIL_PROVIDER
         value: hooks
+      - key: EMAIL_PROVIDER
+        value: resend
       - key: EMAIL_FROM
-        sync: false
+        value: support@libswiftride.com
       - key: EMAIL_REPLY_TO
-        sync: false
+        value: support@libswiftride.com
       - key: RESEND_API_KEY
         sync: false
       - key: PAYMENT_PROVIDER

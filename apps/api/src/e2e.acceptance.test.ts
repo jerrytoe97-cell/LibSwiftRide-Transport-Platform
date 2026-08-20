@@ -113,8 +113,13 @@ describe.sequential("end-to-end acceptance", () => {
     const onboarded = await request(app).post("/api/v1/drivers/onboarding").set("authorization", `Bearer ${driverToken}`).send({ licenseNumber: `LIC-${suffix}`, nationalIdRef: `test-id-${suffix}` }).expect(200);
     driverId = onboarded.body.data.id;
     const kycCase = await prisma.kycCase.findUniqueOrThrow({ where: { driverId } });
-    await prisma.kycDocument.createMany({ data: ["DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "PROFILE_PHOTO"].map((type) => ({ kycCaseId: kycCase.id, type: type as "DRIVER_LICENSE", storageKey: `acceptance-fictional/${suffix}/${type}`, mimeType: "image/jpeg", sizeBytes: 4, checksum: "a".repeat(64), scanStatus: "CLEAN", scannedAt: new Date() })) });
+    await prisma.kycDocument.createMany({ data: ["DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "PROFILE_PHOTO"].map((type) => ({ kycCaseId: kycCase.id, type: type as "DRIVER_LICENSE", storageKey: `kyc/clean/acceptance-fictional/${suffix}/${type}`, mimeType: "image/jpeg", sizeBytes: 4, checksum: "a".repeat(64), scanStatus: type === "PROFILE_PHOTO" ? "QUARANTINED" : "CLEAN", scannedAt: type === "PROFILE_PHOTO" ? null : new Date() })) });
+    await request(app).post("/api/v1/drivers/kyc/submit").set("authorization", `Bearer ${driverToken}`).expect(422);
+    const profilePhoto = await prisma.kycDocument.update({ where: { kycCaseId_type: { kycCaseId: kycCase.id, type: "PROFILE_PHOTO" } }, data: { scanStatus: "CLEAN", scannedAt: new Date() } });
     const submitted = await request(app).post("/api/v1/drivers/kyc/submit").set("authorization", `Bearer ${driverToken}`).expect(200);
+    await prisma.kycDocument.update({ where: { id: profilePhoto.id }, data: { scanStatus: "INFECTED" } });
+    await request(app).post(`/api/v1/admin/kyc/${submitted.body.data.id}/review`).set("authorization", `Bearer ${adminToken}`).send({ decision: "APPROVED" }).expect(422);
+    await prisma.kycDocument.update({ where: { id: profilePhoto.id }, data: { scanStatus: "CLEAN" } });
     await request(app).post(`/api/v1/admin/kyc/${submitted.body.data.id}/review`).set("authorization", `Bearer ${adminToken}`).send({ decision: "APPROVED" }).expect(200);
     await prisma.vehicle.create({ data: { driverId, make: "Toyota", model: "Prius", year: 2022, color: "White", plateNumber: `T${suffix.slice(-6)}` } });
     await request(app).post("/api/v1/drivers/me/availability").set("authorization", `Bearer ${driverToken}`).send({ status: "AVAILABLE" }).expect(200);

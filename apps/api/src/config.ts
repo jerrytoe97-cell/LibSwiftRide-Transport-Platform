@@ -55,7 +55,12 @@ export const environmentSchema = z.object({
   KYC_S3_ACCESS_KEY_ID: optionalSecret,
   KYC_S3_SECRET_ACCESS_KEY: optionalSecret,
   KYC_S3_FORCE_PATH_STYLE: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
-  KYC_SCANNER_PROVIDER: z.enum(["disabled", "sandbox"]).default("disabled"),
+  KYC_S3_SERVER_SIDE_ENCRYPTION: z.enum(["provider", "AES256", "aws:kms"]).default("provider"),
+  KYC_S3_KMS_KEY_ID: z.preprocess((value) => value === "" ? undefined : value, z.string().min(1).optional()),
+  KYC_SCANNER_PROVIDER: z.enum(["disabled", "sandbox", "webhook"]).default("disabled"),
+  KYC_SCANNER_URL: optionalUrl,
+  KYC_SCANNER_TOKEN: optionalSecret,
+  KYC_SCANNER_TIMEOUT_MS: z.coerce.number().int().min(1_000).max(30_000).default(10_000),
   KYC_FICTIONAL_ONLY: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
   KYC_UPLOAD_MAX_BYTES: z.coerce.number().int().min(1024).max(10 * 1024 * 1024).default(5 * 1024 * 1024)
 }).superRefine((environment, context) => {
@@ -82,14 +87,26 @@ export const environmentSchema = z.object({
   if (environment.JWT_ACCESS_SECRET === environment.JWT_REFRESH_SECRET) {
     context.addIssue({ code: "custom", path: ["JWT_REFRESH_SECRET"], message: "Access and refresh secrets must be different" });
   }
-  if (environment.KYC_STORAGE_PROVIDER === "s3" && (!environment.KYC_S3_ENDPOINT || !environment.KYC_S3_BUCKET || !environment.KYC_S3_ACCESS_KEY_ID || !environment.KYC_S3_SECRET_ACCESS_KEY)) {
-    context.addIssue({ code: "custom", path: ["KYC_S3_ENDPOINT"], message: "Private KYC S3 endpoint, bucket and credentials are required" });
+  if (environment.KYC_STORAGE_PROVIDER === "s3" && !environment.KYC_S3_BUCKET) {
+    context.addIssue({ code: "custom", path: ["KYC_S3_BUCKET"], message: "A private KYC S3 bucket is required" });
+  }
+  if (Boolean(environment.KYC_S3_ACCESS_KEY_ID) !== Boolean(environment.KYC_S3_SECRET_ACCESS_KEY)) {
+    context.addIssue({ code: "custom", path: ["KYC_S3_ACCESS_KEY_ID"], message: "KYC S3 access-key ID and secret must be configured together" });
+  }
+  if (environment.KYC_S3_SERVER_SIDE_ENCRYPTION === "aws:kms" && !environment.KYC_S3_KMS_KEY_ID) {
+    context.addIssue({ code: "custom", path: ["KYC_S3_KMS_KEY_ID"], message: "KYC_S3_KMS_KEY_ID is required for aws:kms encryption" });
   }
   if (environment.KYC_STORAGE_PROVIDER === "s3" && environment.KYC_SCANNER_PROVIDER === "disabled") {
     context.addIssue({ code: "custom", path: ["KYC_SCANNER_PROVIDER"], message: "KYC uploads require a malware scanner" });
   }
   if (!environment.KYC_FICTIONAL_ONLY && environment.KYC_SCANNER_PROVIDER === "sandbox") {
     context.addIssue({ code: "custom", path: ["KYC_SCANNER_PROVIDER"], message: "Sandbox scanning may only be used for fictional staging documents" });
+  }
+  if (environment.KYC_SCANNER_PROVIDER === "webhook" && (!environment.KYC_SCANNER_URL || !environment.KYC_SCANNER_TOKEN)) {
+    context.addIssue({ code: "custom", path: ["KYC_SCANNER_URL"], message: "Production KYC scanning requires a protected webhook URL and token" });
+  }
+  if (environment.NODE_ENV === "production" && environment.KYC_SCANNER_URL && !environment.KYC_SCANNER_URL.startsWith("https://")) {
+    context.addIssue({ code: "custom", path: ["KYC_SCANNER_URL"], message: "Production KYC scanner URL must use HTTPS" });
   }
   if (environment.NODE_ENV === "production") {
     const origins = environment.CORS_ORIGINS.split(",").map((origin) => origin.trim());

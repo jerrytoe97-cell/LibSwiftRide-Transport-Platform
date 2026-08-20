@@ -1018,12 +1018,15 @@ api.get("/drivers/kyc/uploads/config", authenticate, authorize("DRIVER"), asyncR
 
 api.post("/drivers/kyc/uploads", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {
   if (!kycUploadEnabled()) return res.status(503).json({ error: { code: "KYC_STORAGE_UNAVAILABLE", message: "Private document storage is not configured" } });
-  const input = z.object({ type: kycDocumentType, mimeType: kycMimeType, sizeBytes: z.number().int().positive().max(config.KYC_UPLOAD_MAX_BYTES), fictionalDocument: z.literal(true) }).parse(req.body);
+  const input = z.object({ type: kycDocumentType, mimeType: kycMimeType, sizeBytes: z.number().int().positive().max(config.KYC_UPLOAD_MAX_BYTES), fictionalDocument: z.boolean() })
+    .refine((value) => value.fictionalDocument === config.KYC_FICTIONAL_ONLY, "Document classification does not match this environment").parse(req.body);
   const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub } });
   if (!driver) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Complete driver onboarding first" } });
   const kycCase = await prisma.kycCase.upsert({ where: { driverId: driver.id }, update: {}, create: { driverId: driver.id } });
   if (!["DRAFT", "REJECTED"].includes(kycCase.status)) return res.status(409).json({ error: { code: "KYC_LOCKED", message: "Documents cannot be changed during review" } });
-  res.status(201).json({ data: await createKycUploadIntent({ caseId: kycCase.id, type: input.type, mimeType: input.mimeType, sizeBytes: input.sizeBytes }) });
+  const intent = await createKycUploadIntent({ caseId: kycCase.id, type: input.type, mimeType: input.mimeType, sizeBytes: input.sizeBytes });
+  await writeAudit({ actorId: req.user!.sub, action: "KYC_UPLOAD_AUTHORIZED", entityType: "KycCase", entityId: kycCase.id, ipAddress: req.ip, metadata: { type: input.type, mimeType: input.mimeType, sizeBytes: input.sizeBytes, fictional: config.KYC_FICTIONAL_ONLY } });
+  res.status(201).json({ data: intent });
 }));
 
 api.post("/drivers/kyc/uploads/complete", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {
@@ -1031,12 +1034,13 @@ api.post("/drivers/kyc/uploads/complete", authenticate, authorize("DRIVER"), asy
   const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub }, include: { kycCase: true } });
   if (!driver?.kycCase) return res.status(404).json({ error: { code: "KYC_NOT_STARTED", message: "Complete driver onboarding first" } });
   if (!["DRAFT", "REJECTED"].includes(driver.kycCase.status)) return res.status(409).json({ error: { code: "KYC_LOCKED", message: "Documents cannot be changed during review" } });
-  if (!input.storageKey.startsWith(`kyc/${driver.kycCase.id}/${input.type}/`)) return res.status(403).json({ error: { code: "KYC_UPLOAD_FORBIDDEN", message: "Upload does not belong to this verification case" } });
+  if (!input.storageKey.startsWith(`kyc/quarantine/${driver.kycCase.id}/${input.type}/`)) return res.status(403).json({ error: { code: "KYC_UPLOAD_FORBIDDEN", message: "Upload does not belong to this verification case" } });
   let verified: Awaited<ReturnType<typeof verifyAndScanKycObject>>;
   try {
     verified = await verifyAndScanKycObject(input);
   } catch (error) {
     await deleteKycObject(input.storageKey).catch(() => undefined);
+    await writeAudit({ actorId: req.user!.sub, action: "KYC_DOCUMENT_SCAN_REJECTED", entityType: "KycCase", entityId: driver.kycCase.id, ipAddress: req.ip, metadata: { type: input.type, reason: typeof error === "object" && error && "code" in error ? String(error.code) : "KYC_SCAN_FAILED" } });
     throw error;
   }
   const previous = await prisma.kycDocument.findUnique({ where: { kycCaseId_type: { kycCaseId: driver.kycCase.id, type: input.type } } });
@@ -1049,6 +1053,7 @@ api.post("/drivers/kyc/uploads/complete", authenticate, authorize("DRIVER"), asy
     throw error;
   });
   if (previous && previous.storageKey !== verified.storageKey) await deleteKycObject(previous.storageKey).catch((error) => logger.warn({ err: error, documentId: previous.id }, "superseded KYC object cleanup failed"));
+  await writeAudit({ actorId: req.user!.sub, action: "KYC_DOCUMENT_SCANNED", entityType: "KycDocument", entityId: document.id, ipAddress: req.ip, metadata: { type: input.type, scanStatus: verified.scanStatus, scannerProvider: config.KYC_SCANNER_PROVIDER } });
   await writeAudit({ actorId: req.user!.sub, action: "KYC_DOCUMENT_UPLOADED", entityType: "KycDocument", entityId: document.id, ipAddress: req.ip, metadata: { type: input.type, sizeBytes: input.sizeBytes, scanStatus: verified.scanStatus } });
   res.json({ data: { id: document.id, type: document.type, sizeBytes: document.sizeBytes, scanStatus: document.scanStatus, createdAt: document.createdAt } });
 }));
@@ -1056,6 +1061,7 @@ api.post("/drivers/kyc/uploads/complete", authenticate, authorize("DRIVER"), asy
 api.post("/drivers/kyc/submit", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {
   const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub }, include: { user: { select: { email: true } }, kycCase: { include: { documents: true } } } });
   if (!driver?.kycCase) return res.status(422).json({ error: { code: "KYC_NOT_STARTED", message: "Upload verification documents first" } });
+  if (!["DRAFT", "REJECTED"].includes(driver.kycCase.status)) return res.status(409).json({ error: { code: "KYC_LOCKED", message: "Verification has already been submitted" } });
   const required = ["DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "PROFILE_PHOTO"];
   const clean = new Set(driver.kycCase.documents.filter((document) => document.scanStatus === "CLEAN").map((document) => document.type));
   if (required.some((type) => !clean.has(type as any))) return res.status(422).json({ error: { code: "KYC_DOCUMENTS_REQUIRED", message: "All five required documents must upload and pass scanning" } });
@@ -1081,10 +1087,12 @@ api.post("/admin/kyc/:id/review", authenticate, authorize("ADMIN"), asyncRoute(a
   const requiredDocuments = ["DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "PROFILE_PHOTO"];
   if (input.decision === "APPROVED" && requiredDocuments.some((type) => !existing.documents.some((document) => document.type === type && document.scanStatus === "CLEAN"))) return res.status(422).json({ error: { code: "KYC_DOCUMENTS_NOT_CLEAN", message: "All required documents must pass scanning before approval" } });
   const result = await prisma.$transaction(async (tx) => {
-    const reviewed = await tx.kycCase.update({ where: { id: existing.id }, data: { status: input.decision, reviewerId: req.user!.sub, reviewedAt: new Date(), rejectionCode: input.rejectionCode ?? null, rejectionNotes: input.rejectionNotes ?? null } });
+    const claimed = await tx.kycCase.updateMany({ where: { id: existing.id, status: { in: ["SUBMITTED", "UNDER_REVIEW"] } }, data: { status: input.decision, reviewerId: req.user!.sub, reviewedAt: new Date(), rejectionCode: input.rejectionCode ?? null, rejectionNotes: input.rejectionNotes ?? null } });
+    if (claimed.count !== 1) return null;
     await tx.driver.update({ where: { id: existing.driverId }, data: input.decision === "APPROVED" ? { verifiedAt: new Date(), approvedById: req.user!.sub, onboardingStep: "COMPLETE" } : { verifiedAt: null, onboardingStep: "DOCUMENTS" } });
-    return reviewed;
+    return tx.kycCase.findUniqueOrThrow({ where: { id: existing.id } });
   });
+  if (!result) return res.status(409).json({ error: { code: "KYC_REVIEW_CONFLICT", message: "This verification was already reviewed" } });
   await writeAudit({ actorId: req.user!.sub, action: `KYC_${input.decision}`, entityType: "KycCase", entityId: existing.id, ipAddress: req.ip, ...(input.rejectionCode ? { metadata: { rejectionCode: input.rejectionCode } } : {}) });
   const reviewNotice = input.decision === "APPROVED"
     ? transactionalEmailContent({ template: "kyc-approved" })
@@ -1107,6 +1115,10 @@ api.post("/admin/kyc/documents/:id/access", authenticate, authorize("ADMIN"), as
   const document = await prisma.kycDocument.findUnique({ where: { id: req.params.id }, include: { kycCase: true } });
   if (!document || !["SUBMITTED", "UNDER_REVIEW"].includes(document.kycCase.status) || document.scanStatus !== "CLEAN") return res.status(404).json({ error: { code: "KYC_DOCUMENT_UNAVAILABLE", message: "Reviewable clean document not found" } });
   const url = await createKycDownloadUrl(document.storageKey);
+  if (document.kycCase.status === "SUBMITTED") {
+    const started = await prisma.kycCase.updateMany({ where: { id: document.kycCaseId, status: "SUBMITTED" }, data: { status: "UNDER_REVIEW", reviewerId: req.user!.sub } });
+    if (started.count) await writeAudit({ actorId: req.user!.sub, action: "KYC_REVIEW_STARTED", entityType: "KycCase", entityId: document.kycCaseId, ipAddress: req.ip });
+  }
   await writeAudit({ actorId: req.user!.sub, action: "KYC_DOCUMENT_ACCESSED", entityType: "KycDocument", entityId: document.id, ipAddress: req.ip, metadata: { caseId: document.kycCaseId, type: document.type } });
   res.setHeader("cache-control", "no-store");
   res.json({ data: { url, expiresIn: 120 } });

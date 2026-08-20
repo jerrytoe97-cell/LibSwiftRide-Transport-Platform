@@ -76,6 +76,28 @@ describe("production environment safeguards", () => {
     expect(() => parseEnvironment({ ...fictionalKyc, KYC_S3_SECRET_ACCESS_KEY: "" })).toThrow("Invalid environment");
   });
 
+  it("supports native AWS credentials and requires a fail-closed production scanner", () => {
+    const productionKyc = {
+      ...production,
+      KYC_STORAGE_PROVIDER: "s3",
+      KYC_S3_REGION: "us-east-1",
+      KYC_S3_BUCKET: "libswiftride-production-kyc",
+      KYC_SCANNER_PROVIDER: "webhook",
+      KYC_SCANNER_URL: "https://scanner.internal.example/v1/scan",
+      KYC_SCANNER_TOKEN: "protected-scanner-token-value",
+      KYC_FICTIONAL_ONLY: "false"
+    };
+    expect(parseEnvironment(productionKyc)).toMatchObject({ KYC_STORAGE_PROVIDER: "s3", KYC_SCANNER_PROVIDER: "webhook", KYC_FICTIONAL_ONLY: false });
+    expect(() => parseEnvironment({ ...productionKyc, KYC_SCANNER_TOKEN: "" })).toThrow("Invalid environment");
+    expect(() => parseEnvironment({ ...productionKyc, KYC_SCANNER_URL: "http://scanner.internal.example/v1/scan" })).toThrow("Invalid environment");
+    expect(() => parseEnvironment({ ...productionKyc, KYC_S3_ACCESS_KEY_ID: "access-key-without-secret" })).toThrow("Invalid environment");
+  });
+
+  it("requires a KMS key when KYC storage selects aws:kms", () => {
+    expect(() => parseEnvironment({ ...production, KYC_S3_SERVER_SIDE_ENCRYPTION: "aws:kms" })).toThrow("Invalid environment");
+    expect(parseEnvironment({ ...production, KYC_S3_SERVER_SIDE_ENCRYPTION: "aws:kms", KYC_S3_KMS_KEY_ID: "alias/libswiftride-kyc" })).toMatchObject({ KYC_S3_SERVER_SIDE_ENCRYPTION: "aws:kms" });
+  });
+
   it.each([
     ["wildcard CORS", { CORS_ORIGINS: "*" }],
     ["non-TLS CORS", { CORS_ORIGINS: "http://passenger.example.com" }],

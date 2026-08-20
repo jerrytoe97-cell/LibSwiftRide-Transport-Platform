@@ -99,9 +99,10 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
     });
   }
   const kycCode = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : null;
-  const safeKycCodes = new Set(["KYC_FILE_TYPE_MISMATCH", "KYC_MALWARE_DETECTED", "KYC_FILE_SIZE_MISMATCH", "KYC_FILE_METADATA_INVALID", "KYC_FILE_INCOMPLETE", "KYC_CHECKSUM_MISMATCH"]);
+  const safeKycCodes = new Set(["KYC_FILE_TYPE_MISMATCH", "KYC_MALWARE_DETECTED", "KYC_FILE_SIZE_MISMATCH", "KYC_FILE_METADATA_INVALID", "KYC_FILE_INCOMPLETE", "KYC_CHECKSUM_MISMATCH", "KYC_SCANNER_INVALID_RESPONSE"]);
   if (kycCode && safeKycCodes.has(kycCode)) return res.status(422).json({ error: { code: kycCode, message: error instanceof Error ? error.message : "Document security validation failed" } });
   if (kycCode === "KYC_STORAGE_UNAVAILABLE") return res.status(503).json({ error: { code: kycCode, message: "Private document storage is unavailable" } });
+  if (kycCode === "KYC_SCANNER_UNAVAILABLE") return res.status(503).json({ error: { code: kycCode, message: "Document security scanning is unavailable" } });
   res.status(500).json({ error: { code: "INTERNAL_ERROR", message: "An unexpected error occurred" } });
 });
 
