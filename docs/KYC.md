@@ -1,20 +1,28 @@
-# Driver verification and KYC
+# Driver verification and private document storage
 
-Driver onboarding creates a KYC case. Drivers upload private object-storage references plus SHA-256 checksums; raw documents never pass through or reside in the application database.
+Driver onboarding creates a KYC case. The Driver portal requests a five-minute signed `PUT` URL and uploads directly to a private S3-compatible quarantine key. The API reads the object transiently for verification, copies a passing object to a separate clean key, and deletes the quarantine key so the still-live upload URL cannot overwrite reviewed content. Only the private clean storage key, MIME type, size, SHA-256 checksum and scan result are stored in PostgreSQL. Raw files must never be public, logged, emailed, committed, or stored in the database.
 
-Required submission documents are national ID, driver license and profile photo. Vehicle registration, insurance and inspection are required before vehicle approval and service activation.
+## Staging safety boundary
 
-The Driver portal provides JPEG/PNG capture, a 5 MB client-side limit, camera direction hints, and local previews for the public driver portrait and vehicle exterior photo. These previews never leave the device until private object storage, malware scanning, signed upload intents, retention rules, and authorized media delivery are configured. Do not repurpose KYC document references as public image URLs.
+Staging accepts **fictional documents only**. `KYC_FICTIONAL_ONLY=true` is the default and the portal requires an explicit confirmation. The `sandbox` scanner validates JPEG/PNG/PDF magic bytes, signed size/type metadata, SHA-256 integrity and the EICAR test signature. It is not approved for real identity documents; configuration validation refuses `KYC_SCANNER_PROVIDER=sandbox` when fictional-only mode is disabled.
 
-States:
+Required documents are driver licence, vehicle registration, insurance, vehicle inspection/photo and profile photo. All five must have `scanStatus=CLEAN` before submission or approval.
 
-`DRAFT → SUBMITTED → UNDER_REVIEW → APPROVED | REJECTED → SUBMITTED`
+## Provider configuration
 
-Only admins can approve or reject. Decisions record reviewer, timestamp and structured rejection code, and append an audit record. A driver can become available only when:
+Keep `KYC_STORAGE_PROVIDER=disabled` until an account owner provisions a dedicated private S3-compatible bucket. Then enter these values only in the protected deployment environment:
 
-- KYC is approved
-- `verifiedAt` is present
-- an active vehicle is assigned
-- no current trip is active
+- `KYC_STORAGE_PROVIDER=s3`
+- `KYC_S3_ENDPOINT`, `KYC_S3_REGION`, `KYC_S3_BUCKET`
+- `KYC_S3_ACCESS_KEY_ID`, `KYC_S3_SECRET_ACCESS_KEY`
+- `KYC_S3_FORCE_PATH_STYLE` as required by the provider
+- `KYC_SCANNER_PROVIDER=sandbox`, `KYC_FICTIONAL_ONLY=true` for fictional staging tests
+- `KYC_UPLOAD_MAX_BYTES=5242880`
 
-Document storage must use encryption, signed short-lived uploads/downloads, malware scanning, restricted reviewer access, retention policies and access auditing. Government IDs and storage keys must never appear in logs.
+The bucket must block all public access, use encryption at rest, enable versioning/access logs, and apply an approved retention/deletion lifecycle. Its CORS policy should allow `PUT` only from the exact Driver staging origin, allow `content-type`, `x-amz-meta-fictional`, and `x-amz-meta-classification`, and use a five-minute maximum age. Do not allow wildcard origins. Credentials should be bucket-scoped and limited to object read/write/delete under the `kyc/` prefix.
+
+## Review controls
+
+States are `DRAFT → SUBMITTED → UNDER_REVIEW → APPROVED | REJECTED → SUBMITTED`. Only Admin accounts can review. The Admin portal obtains an audited signed `GET` URL that expires after two minutes and sends `Cache-Control: no-store`. API list responses deliberately omit storage keys and checksums. Decisions record reviewer, timestamp, structured rejection data and append-only audit events.
+
+A driver can become available only after approval, `verifiedAt` is set, and an active vehicle is assigned. Before accepting real documents, replace sandbox scanning with an approved malware-scanning provider, complete privacy/legal and retention review, validate backup exclusions, and perform a production security assessment.

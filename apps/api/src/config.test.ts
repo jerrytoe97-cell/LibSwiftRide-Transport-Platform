@@ -43,13 +43,37 @@ describe("production environment safeguards", () => {
       NOTIFICATION_PROVIDER: "hooks",
       EMAIL_PROVIDER: "resend",
       EMAIL_FROM: "support@libswiftride.example",
+      EMAIL_REPLY_TO: "support@libswiftride.example",
       RESEND_API_KEY: "resend-key-with-at-least-32-characters"
     })).toMatchObject({ NOTIFICATION_PROVIDER: "hooks", EMAIL_PROVIDER: "resend" });
     expect(() => parseEnvironment({
       ...production,
       NOTIFICATION_PROVIDER: "hooks",
+      EMAIL_PROVIDER: "resend",
+      EMAIL_FROM: "support@libswiftride.example",
+      RESEND_API_KEY: "resend-key-with-at-least-32-characters"
+    })).toThrow("Invalid environment");
+    expect(() => parseEnvironment({
+      ...production,
+      NOTIFICATION_PROVIDER: "hooks",
       EMAIL_PROVIDER: "hooks"
     })).toThrow("Invalid environment");
+  });
+
+  it("allows sandbox KYC scanning only for fictional documents with complete private storage configuration", () => {
+    const fictionalKyc = {
+      ...production,
+      KYC_STORAGE_PROVIDER: "s3",
+      KYC_S3_ENDPOINT: "https://private-storage.example.com",
+      KYC_S3_BUCKET: "libswiftride-staging-kyc",
+      KYC_S3_ACCESS_KEY_ID: "staging-access-key-id",
+      KYC_S3_SECRET_ACCESS_KEY: "staging-secret-access-key",
+      KYC_SCANNER_PROVIDER: "sandbox",
+      KYC_FICTIONAL_ONLY: "true"
+    };
+    expect(parseEnvironment(fictionalKyc)).toMatchObject({ KYC_STORAGE_PROVIDER: "s3", KYC_FICTIONAL_ONLY: true });
+    expect(() => parseEnvironment({ ...fictionalKyc, KYC_FICTIONAL_ONLY: "false" })).toThrow("Invalid environment");
+    expect(() => parseEnvironment({ ...fictionalKyc, KYC_S3_SECRET_ACCESS_KEY: "" })).toThrow("Invalid environment");
   });
 
   it.each([

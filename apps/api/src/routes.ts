@@ -20,6 +20,8 @@ import { fraudAction, fraudScore, incentiveQualified, zoneMultiplierFor } from "
 import { calculateRoadRoute, RoutingError } from "./services/routing.js";
 import { decryptMfaSecret, encryptMfaSecret, generateMfaSecret, generateRecoveryCodes, provisioningUri, recoveryCodeHash, requiresMfa, verifyTotp } from "./services/mfa.js";
 import { liberianPhoneLookupCandidates, normalizeLiberianPhone, selectAuthenticatedIdentity, strongPasswordSchema } from "./services/identity.js";
+import { allowedKycMimeTypes, createKycDownloadUrl, createKycUploadIntent, deleteKycObject, kycUploadEnabled, verifyAndScanKycObject } from "./services/kyc-storage.js";
+import { transactionalEmailContent } from "./services/transactional-email-templates.js";
 
 export const api = Router();
 const asyncRoute = (handler: (req: any, res: any) => Promise<unknown>) =>
@@ -320,8 +322,10 @@ api.post("/auth/password-reset/request", asyncRoute(async (req, res) => {
   const email = z.object({ email: z.email() }).parse(req.body).email;
   const user = await prisma.user.findUnique({ where: { email } });
   if (user) {
-    const token = await createVerificationToken(user.id, "PASSWORD_RESET");
-    await queueNotification({ userId: user.id, channel: "EMAIL", template: "password-reset", title: "Reset your LibSwiftRide password", body: `Your one-time LibSwiftRide password reset token is: ${token}\n\nIt expires in one hour. If you did not request this reset, you can ignore this email.` });
+    await (async () => {
+      const token = await createVerificationToken(user.id, "PASSWORD_RESET");
+      await queueNotification({ userId: user.id, channel: "EMAIL", ...transactionalEmailContent({ template: "password-reset", token }) });
+    })().catch(() => undefined);
   }
   res.status(202).json({ data: { accepted: true } });
 }));
@@ -330,10 +334,12 @@ api.post("/auth/password-reset/confirm", asyncRoute(async (req, res) => {
   const input = z.object({ token: z.string().min(32), password: strongPasswordSchema }).parse(req.body);
   const record = await prisma.verificationToken.findUnique({ where: { tokenHash: tokenDigest(input.token) } });
   if (!record || record.type !== "PASSWORD_RESET" || record.usedAt || record.expiresAt < new Date()) return res.status(400).json({ error: { code: "INVALID_TOKEN", message: "Reset token is invalid or expired" } });
+  const securityAlert = transactionalEmailContent({ template: "account-security-alert", event: "Your LibSwiftRide password was changed and all previous sessions were signed out." });
   await prisma.$transaction([
     prisma.user.update({ where: { id: record.userId }, data: { passwordHash: await hashPassword(input.password) } }),
     prisma.verificationToken.update({ where: { id: record.id }, data: { usedAt: new Date() } }),
-    prisma.refreshToken.updateMany({ where: { userId: record.userId, revokedAt: null }, data: { revokedAt: new Date() } })
+    prisma.refreshToken.updateMany({ where: { userId: record.userId, revokedAt: null }, data: { revokedAt: new Date() } }),
+    prisma.notification.create({ data: { userId: record.userId, channel: "EMAIL", ...securityAlert } })
   ]);
   res.json({ data: { reset: true } });
 }));
@@ -423,7 +429,7 @@ api.post("/rides", authenticate, authorize("PASSENGER"), asyncRoute(async (req, 
     return res.status(status).json({ error: { code: error.code, message: error.message } });
   }
   const [passenger, corporateEmployee, ridePass, recentRides, failedPayments] = await Promise.all([
-    prisma.user.findUniqueOrThrow({ where: { id: req.user!.sub }, select: { createdAt: true } }),
+    prisma.user.findUniqueOrThrow({ where: { id: req.user!.sub }, select: { createdAt: true, email: true } }),
     input.corporateEmployeeId ? prisma.corporateEmployee.findFirst({ where: { id: input.corporateEmployeeId, userId: req.user!.sub, active: true, account: { active: true } }, include: { account: true } }) : null,
     input.ridePassId ? prisma.ridePass.findFirst({ where: { id: input.ridePassId, userId: req.user!.sub, status: "ACTIVE", expiresAt: { gt: new Date() }, ridesRemaining: { gt: 0 } } }) : null,
     prisma.ride.count({ where: { passengerId: req.user!.sub, requestedAt: { gte: new Date(Date.now() - 3_600_000) } } }),
@@ -484,6 +490,7 @@ api.post("/rides", authenticate, authorize("PASSENGER"), asyncRoute(async (req, 
     }
     return created;
   });
+  if (passenger.email) await queueNotification({ userId: ride.passengerId, channel: "EMAIL", ...transactionalEmailContent({ template: "ride-booking-confirmation", rideReference: `LSR-${ride.id.slice(0, 8).toUpperCase()}`, pickup: ride.pickupAddress, destination: ride.destinationAddress, ...(ride.scheduledFor ? { scheduledFor: ride.scheduledFor.toISOString() } : {}) }) });
   if (!input.scheduledFor) void matchDriver(ride.id).catch((error) => logger.error({ err: error, rideId: ride.id }, "automatic matching failed"));
   res.status(201).json({ data: ride });
 }));
@@ -602,7 +609,7 @@ api.post("/rides/:id/transitions", authenticate, authorize("PASSENGER", "DRIVER"
     tollMinor: z.number().int().min(0).max(10_000_000).optional()
   }).refine((value) => value.status !== "CANCELLED" || Boolean(value.cancellationReason), "Cancellation reason is required").parse(req.body);
   const { status } = input;
-  const ride = await prisma.ride.findUnique({ where: { id: req.params.id }, include: { driver: true, payment: true, promoCode: true } });
+  const ride = await prisma.ride.findUnique({ where: { id: req.params.id }, include: { passenger: { select: { email: true } }, driver: true, payment: true, promoCode: true } });
   if (!ride) return res.status(404).json({ error: { code: "NOT_FOUND", message: "Ride not found" } });
   const participant = ride.passengerId === req.user!.sub || ride.driver?.userId === req.user!.sub;
   if (!participant && !["ADMIN", "SUPPORT"].includes(req.user!.role)) return res.status(403).json({ error: { code: "FORBIDDEN", message: "Ride access denied" } });
@@ -678,6 +685,7 @@ api.post("/rides/:id/transitions", authenticate, authorize("PASSENGER", "DRIVER"
       queueNotification({ userId: recipientId, channel: "PUSH", template: `ride-${status.toLowerCase().replaceAll("_", "-")}`, ...notification, data })
     ]);
   }
+  if (status === "CANCELLED" && ride.passenger.email) await queueNotification({ userId: ride.passengerId, channel: "EMAIL", ...transactionalEmailContent({ template: "ride-cancelled", rideReference: `LSR-${ride.id.slice(0, 8).toUpperCase()}`, reason: input.cancellationReason! }) });
   res.json({ data: updated });
 }));
 
@@ -992,7 +1000,7 @@ api.get("/drivers/me/onboarding", authenticate, authorize("DRIVER"), asyncRoute(
           reviewedAt: true,
           rejectionCode: true,
           rejectionNotes: true,
-          documents: { select: { type: true, expiresAt: true, createdAt: true } }
+          documents: { select: { type: true, expiresAt: true, createdAt: true, sizeBytes: true, scanStatus: true } }
         }
       },
       vehicle: { select: { id: true, make: true, model: true, plateNumber: true, active: true } }
@@ -1001,47 +1009,91 @@ api.get("/drivers/me/onboarding", authenticate, authorize("DRIVER"), asyncRoute(
   res.json({ data: driver });
 }));
 
-api.put("/drivers/kyc/documents/:type", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {
-  const type = z.enum(["NATIONAL_ID", "DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "PROFILE_PHOTO"]).parse(req.params.type);
-  const input = z.object({ storageKey: z.string().min(10).max(500), mimeType: z.enum(["image/jpeg", "image/png", "application/pdf"]), checksum: z.string().regex(/^[a-f0-9]{64}$/i), expiresAt: z.coerce.date().optional() }).parse(req.body);
+const kycDocumentType = z.enum(["NATIONAL_ID", "DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "PROFILE_PHOTO"]);
+const kycMimeType = z.enum(allowedKycMimeTypes);
+
+api.get("/drivers/kyc/uploads/config", authenticate, authorize("DRIVER"), asyncRoute(async (_req, res) => {
+  res.json({ data: { enabled: kycUploadEnabled(), fictionalOnly: config.KYC_FICTIONAL_ONLY, maxBytes: config.KYC_UPLOAD_MAX_BYTES, mimeTypes: allowedKycMimeTypes } });
+}));
+
+api.post("/drivers/kyc/uploads", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {
+  if (!kycUploadEnabled()) return res.status(503).json({ error: { code: "KYC_STORAGE_UNAVAILABLE", message: "Private document storage is not configured" } });
+  const input = z.object({ type: kycDocumentType, mimeType: kycMimeType, sizeBytes: z.number().int().positive().max(config.KYC_UPLOAD_MAX_BYTES), fictionalDocument: z.literal(true) }).parse(req.body);
   const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub } });
   if (!driver) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Complete driver onboarding first" } });
   const kycCase = await prisma.kycCase.upsert({ where: { driverId: driver.id }, update: {}, create: { driverId: driver.id } });
   if (!["DRAFT", "REJECTED"].includes(kycCase.status)) return res.status(409).json({ error: { code: "KYC_LOCKED", message: "Documents cannot be changed during review" } });
-  const { expiresAt, ...documentInput } = input;
-  const documentData = { ...documentInput, ...(expiresAt ? { expiresAt } : {}) };
-  const document = await prisma.kycDocument.upsert({ where: { kycCaseId_type: { kycCaseId: kycCase.id, type } }, update: documentData, create: { kycCaseId: kycCase.id, type, ...documentData } });
-  res.json({ data: document });
+  res.status(201).json({ data: await createKycUploadIntent({ caseId: kycCase.id, type: input.type, mimeType: input.mimeType, sizeBytes: input.sizeBytes }) });
+}));
+
+api.post("/drivers/kyc/uploads/complete", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {
+  const input = z.object({ type: kycDocumentType, storageKey: z.string().min(20).max(300), mimeType: kycMimeType, sizeBytes: z.number().int().positive().max(config.KYC_UPLOAD_MAX_BYTES), checksum: z.string().regex(/^[a-f0-9]{64}$/i) }).parse(req.body);
+  const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub }, include: { kycCase: true } });
+  if (!driver?.kycCase) return res.status(404).json({ error: { code: "KYC_NOT_STARTED", message: "Complete driver onboarding first" } });
+  if (!["DRAFT", "REJECTED"].includes(driver.kycCase.status)) return res.status(409).json({ error: { code: "KYC_LOCKED", message: "Documents cannot be changed during review" } });
+  if (!input.storageKey.startsWith(`kyc/${driver.kycCase.id}/${input.type}/`)) return res.status(403).json({ error: { code: "KYC_UPLOAD_FORBIDDEN", message: "Upload does not belong to this verification case" } });
+  let verified: Awaited<ReturnType<typeof verifyAndScanKycObject>>;
+  try {
+    verified = await verifyAndScanKycObject(input);
+  } catch (error) {
+    await deleteKycObject(input.storageKey).catch(() => undefined);
+    throw error;
+  }
+  const previous = await prisma.kycDocument.findUnique({ where: { kycCaseId_type: { kycCaseId: driver.kycCase.id, type: input.type } } });
+  const document = await prisma.kycDocument.upsert({
+    where: { kycCaseId_type: { kycCaseId: driver.kycCase.id, type: input.type } },
+    update: { storageKey: verified.storageKey, mimeType: input.mimeType, sizeBytes: input.sizeBytes, checksum: verified.checksum, scanStatus: verified.scanStatus, scannedAt: verified.scannedAt, verifiedAt: null },
+    create: { kycCaseId: driver.kycCase.id, type: input.type, storageKey: verified.storageKey, mimeType: input.mimeType, sizeBytes: input.sizeBytes, checksum: verified.checksum, scanStatus: verified.scanStatus, scannedAt: verified.scannedAt }
+  }).catch(async (error) => {
+    await deleteKycObject(verified.storageKey).catch(() => undefined);
+    throw error;
+  });
+  if (previous && previous.storageKey !== verified.storageKey) await deleteKycObject(previous.storageKey).catch((error) => logger.warn({ err: error, documentId: previous.id }, "superseded KYC object cleanup failed"));
+  await writeAudit({ actorId: req.user!.sub, action: "KYC_DOCUMENT_UPLOADED", entityType: "KycDocument", entityId: document.id, ipAddress: req.ip, metadata: { type: input.type, sizeBytes: input.sizeBytes, scanStatus: verified.scanStatus } });
+  res.json({ data: { id: document.id, type: document.type, sizeBytes: document.sizeBytes, scanStatus: document.scanStatus, createdAt: document.createdAt } });
 }));
 
 api.post("/drivers/kyc/submit", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {
-  const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub }, include: { kycCase: { include: { documents: true } } } });
+  const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub }, include: { user: { select: { email: true } }, kycCase: { include: { documents: true } } } });
   if (!driver?.kycCase) return res.status(422).json({ error: { code: "KYC_NOT_STARTED", message: "Upload verification documents first" } });
-  const required = ["NATIONAL_ID", "DRIVER_LICENSE", "PROFILE_PHOTO"];
-  const present = new Set(driver.kycCase.documents.map((document) => document.type));
-  if (required.some((type) => !present.has(type as any))) return res.status(422).json({ error: { code: "KYC_DOCUMENTS_REQUIRED", message: "National ID, driver license and profile photo are required" } });
+  const required = ["DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "PROFILE_PHOTO"];
+  const clean = new Set(driver.kycCase.documents.filter((document) => document.scanStatus === "CLEAN").map((document) => document.type));
+  if (required.some((type) => !clean.has(type as any))) return res.status(422).json({ error: { code: "KYC_DOCUMENTS_REQUIRED", message: "All five required documents must upload and pass scanning" } });
   const submitted = await prisma.kycCase.update({ where: { id: driver.kycCase.id }, data: { status: "SUBMITTED", submittedAt: new Date(), rejectionCode: null, rejectionNotes: null } });
-  await queueNotification({ userId: req.user!.sub, channel: "IN_APP", template: "kyc-submitted", title: "Verification submitted", body: "Your documents are queued for review." });
+  const applicationReceived = transactionalEmailContent({ template: "driver-application-received" });
+  await Promise.all([
+    queueNotification({ userId: req.user!.sub, channel: "IN_APP", ...applicationReceived }),
+    ...(driver.user.email ? [queueNotification({ userId: req.user!.sub, channel: "EMAIL", ...applicationReceived })] : [])
+  ]);
   res.json({ data: submitted });
 }));
 
 api.get("/admin/kyc", authenticate, authorize("ADMIN"), asyncRoute(async (req, res) => {
   const status = z.enum(["SUBMITTED", "UNDER_REVIEW", "APPROVED", "REJECTED", "EXPIRED"]).optional().parse(req.query.status);
-  const cases = await prisma.kycCase.findMany({ where: status ? { status } : {}, include: { driver: { include: { user: true, vehicle: true } }, documents: true, reviewer: { select: { id: true, firstName: true, lastName: true } } }, orderBy: { submittedAt: "asc" }, take: 100 });
+  const cases = await prisma.kycCase.findMany({ where: status ? { status } : {}, include: { driver: { select: { id: true, user: { select: { id: true, firstName: true, lastName: true } }, vehicle: { select: { id: true, make: true, model: true, year: true, color: true, plateNumber: true, active: true } } } }, documents: { select: { id: true, type: true, mimeType: true, sizeBytes: true, scanStatus: true, createdAt: true } }, reviewer: { select: { id: true, firstName: true, lastName: true } } }, orderBy: { submittedAt: "asc" }, take: 100 });
   res.json({ data: cases });
 }));
 
 api.post("/admin/kyc/:id/review", authenticate, authorize("ADMIN"), asyncRoute(async (req, res) => {
   const input = z.object({ decision: z.enum(["APPROVED", "REJECTED"]), rejectionCode: z.string().max(80).optional(), rejectionNotes: z.string().max(500).optional() }).refine((value) => value.decision === "APPROVED" || Boolean(value.rejectionCode), "Rejection code is required").parse(req.body);
-  const existing = await prisma.kycCase.findUnique({ where: { id: req.params.id }, include: { driver: true } });
+  const existing = await prisma.kycCase.findUnique({ where: { id: req.params.id }, include: { driver: { include: { user: { select: { email: true } } } }, documents: { select: { type: true, scanStatus: true } } } });
   if (!existing || !["SUBMITTED", "UNDER_REVIEW"].includes(existing.status)) return res.status(409).json({ error: { code: "KYC_NOT_REVIEWABLE", message: "KYC case is not reviewable" } });
+  const requiredDocuments = ["DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "PROFILE_PHOTO"];
+  if (input.decision === "APPROVED" && requiredDocuments.some((type) => !existing.documents.some((document) => document.type === type && document.scanStatus === "CLEAN"))) return res.status(422).json({ error: { code: "KYC_DOCUMENTS_NOT_CLEAN", message: "All required documents must pass scanning before approval" } });
   const result = await prisma.$transaction(async (tx) => {
     const reviewed = await tx.kycCase.update({ where: { id: existing.id }, data: { status: input.decision, reviewerId: req.user!.sub, reviewedAt: new Date(), rejectionCode: input.rejectionCode ?? null, rejectionNotes: input.rejectionNotes ?? null } });
     await tx.driver.update({ where: { id: existing.driverId }, data: input.decision === "APPROVED" ? { verifiedAt: new Date(), approvedById: req.user!.sub, onboardingStep: "COMPLETE" } : { verifiedAt: null, onboardingStep: "DOCUMENTS" } });
     return reviewed;
   });
   await writeAudit({ actorId: req.user!.sub, action: `KYC_${input.decision}`, entityType: "KycCase", entityId: existing.id, ipAddress: req.ip, ...(input.rejectionCode ? { metadata: { rejectionCode: input.rejectionCode } } : {}) });
-  await queueNotification({ userId: existing.driver.userId, channel: "IN_APP", template: "kyc-reviewed", title: `Verification ${input.decision.toLowerCase()}`, body: input.decision === "APPROVED" ? "You can now go online after adding an approved vehicle." : "Review the requested changes and submit again." });
+  const reviewNotice = input.decision === "APPROVED"
+    ? transactionalEmailContent({ template: "kyc-approved" })
+    : transactionalEmailContent({ template: "kyc-rejected", ...(input.rejectionNotes ? { reason: input.rejectionNotes } : {}) });
+  await Promise.all([
+    queueNotification({ userId: existing.driver.userId, channel: "IN_APP", ...reviewNotice }),
+    ...(existing.driver.user.email ? [queueNotification({ userId: existing.driver.userId, channel: "EMAIL", ...reviewNotice })] : []),
+    ...(input.decision === "APPROVED" ? [queueNotification({ userId: existing.driver.userId, channel: "IN_APP", ...transactionalEmailContent({ template: "driver-activated" }) })] : [])
+  ]);
   res.json({ data: result });
 }));
 
@@ -1049,6 +1101,15 @@ api.post("/devices", authenticate, asyncRoute(async (req, res) => {
   const input = z.object({ platform: z.enum(["ios", "android", "web"]), pushToken: z.string().min(20).max(500) }).parse(req.body);
   const device = await prisma.device.upsert({ where: { pushToken: input.pushToken }, update: { userId: req.user!.sub, platform: input.platform, active: true, lastSeenAt: new Date() }, create: { userId: req.user!.sub, ...input } });
   res.json({ data: device });
+}));
+
+api.post("/admin/kyc/documents/:id/access", authenticate, authorize("ADMIN"), asyncRoute(async (req, res) => {
+  const document = await prisma.kycDocument.findUnique({ where: { id: req.params.id }, include: { kycCase: true } });
+  if (!document || !["SUBMITTED", "UNDER_REVIEW"].includes(document.kycCase.status) || document.scanStatus !== "CLEAN") return res.status(404).json({ error: { code: "KYC_DOCUMENT_UNAVAILABLE", message: "Reviewable clean document not found" } });
+  const url = await createKycDownloadUrl(document.storageKey);
+  await writeAudit({ actorId: req.user!.sub, action: "KYC_DOCUMENT_ACCESSED", entityType: "KycDocument", entityId: document.id, ipAddress: req.ip, metadata: { caseId: document.kycCaseId, type: document.type } });
+  res.setHeader("cache-control", "no-store");
+  res.json({ data: { url, expiresIn: 120 } });
 }));
 
 api.delete("/devices/:id", authenticate, asyncRoute(async (req, res) => {

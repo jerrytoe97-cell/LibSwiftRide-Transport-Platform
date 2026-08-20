@@ -31,6 +31,7 @@ export const environmentSchema = z.object({
   NOTIFICATION_PROVIDER: z.enum(["sandbox", "hooks"]).default("sandbox"),
   EMAIL_PROVIDER: z.enum(["hooks", "resend"]).default("hooks"),
   EMAIL_FROM: z.preprocess((value) => value === "" ? undefined : value, z.email().optional()),
+  EMAIL_REPLY_TO: z.preprocess((value) => value === "" ? undefined : value, z.email().optional()),
   RESEND_API_KEY: optionalSecret,
   ORANGE_MONEY_API_URL: optionalUrl,
   ORANGE_MONEY_API_TOKEN: optionalSecret,
@@ -46,7 +47,17 @@ export const environmentSchema = z.object({
   SMS_DELIVERY_TOKEN: optionalSecret,
   PUSH_DELIVERY_URL: optionalUrl,
   PUSH_DELIVERY_TOKEN: optionalSecret,
-  METRICS_TOKEN: optionalSecret
+  METRICS_TOKEN: optionalSecret,
+  KYC_STORAGE_PROVIDER: z.enum(["disabled", "s3"]).default("disabled"),
+  KYC_S3_ENDPOINT: optionalUrl,
+  KYC_S3_REGION: z.string().min(1).default("auto"),
+  KYC_S3_BUCKET: z.string().min(3).optional(),
+  KYC_S3_ACCESS_KEY_ID: optionalSecret,
+  KYC_S3_SECRET_ACCESS_KEY: optionalSecret,
+  KYC_S3_FORCE_PATH_STYLE: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  KYC_SCANNER_PROVIDER: z.enum(["disabled", "sandbox"]).default("disabled"),
+  KYC_FICTIONAL_ONLY: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
+  KYC_UPLOAD_MAX_BYTES: z.coerce.number().int().min(1024).max(10 * 1024 * 1024).default(5 * 1024 * 1024)
 }).superRefine((environment, context) => {
   if (environment.NODE_ENV === "production" && environment.DEMO_MODE) {
     context.addIssue({ code: "custom", path: ["DEMO_MODE"], message: "Demo mode is forbidden in production" });
@@ -61,8 +72,8 @@ export const environmentSchema = z.object({
     if (environment.EMAIL_PROVIDER === "hooks" && (!environment.EMAIL_DELIVERY_URL || !environment.EMAIL_DELIVERY_TOKEN)) {
       context.addIssue({ code: "custom", path: ["EMAIL_DELIVERY_URL"], message: "EMAIL_DELIVERY_URL and EMAIL_DELIVERY_TOKEN are required for hook email delivery" });
     }
-    if (environment.EMAIL_PROVIDER === "resend" && (!environment.RESEND_API_KEY || !environment.EMAIL_FROM)) {
-      context.addIssue({ code: "custom", path: ["RESEND_API_KEY"], message: "RESEND_API_KEY and EMAIL_FROM are required for Resend email delivery" });
+    if (environment.EMAIL_PROVIDER === "resend" && (!environment.RESEND_API_KEY || !environment.EMAIL_FROM || !environment.EMAIL_REPLY_TO)) {
+      context.addIssue({ code: "custom", path: ["RESEND_API_KEY"], message: "RESEND_API_KEY, EMAIL_FROM and EMAIL_REPLY_TO are required for Resend email delivery" });
     }
   }
   if (environment.NODE_ENV === "production" && environment.PAYMENTS_ENABLED && environment.PAYMENT_PROVIDER !== "mobile-money") {
@@ -70,6 +81,15 @@ export const environmentSchema = z.object({
   }
   if (environment.JWT_ACCESS_SECRET === environment.JWT_REFRESH_SECRET) {
     context.addIssue({ code: "custom", path: ["JWT_REFRESH_SECRET"], message: "Access and refresh secrets must be different" });
+  }
+  if (environment.KYC_STORAGE_PROVIDER === "s3" && (!environment.KYC_S3_ENDPOINT || !environment.KYC_S3_BUCKET || !environment.KYC_S3_ACCESS_KEY_ID || !environment.KYC_S3_SECRET_ACCESS_KEY)) {
+    context.addIssue({ code: "custom", path: ["KYC_S3_ENDPOINT"], message: "Private KYC S3 endpoint, bucket and credentials are required" });
+  }
+  if (environment.KYC_STORAGE_PROVIDER === "s3" && environment.KYC_SCANNER_PROVIDER === "disabled") {
+    context.addIssue({ code: "custom", path: ["KYC_SCANNER_PROVIDER"], message: "KYC uploads require a malware scanner" });
+  }
+  if (!environment.KYC_FICTIONAL_ONLY && environment.KYC_SCANNER_PROVIDER === "sandbox") {
+    context.addIssue({ code: "custom", path: ["KYC_SCANNER_PROVIDER"], message: "Sandbox scanning may only be used for fictional staging documents" });
   }
   if (environment.NODE_ENV === "production") {
     const origins = environment.CORS_ORIGINS.split(",").map((origin) => origin.trim());

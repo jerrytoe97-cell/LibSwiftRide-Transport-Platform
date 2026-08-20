@@ -1,4 +1,5 @@
 import { prisma, redis } from "../lib.js";
+import { transactionalEmailContent } from "./transactional-email-templates.js";
 
 const ONLINE_TTL_SECONDS = 120;
 
@@ -61,6 +62,7 @@ export async function matchDriver(rideId: string) {
       const passengerNotice = { userId: assigned.passengerId, template: "driver-assigned", title: "Driver assigned", body: "A verified driver has been assigned to your ride." };
       await prisma.notification.createMany({ data: [
         { ...driverNotice, channel: "IN_APP" }, { ...driverNotice, channel: "PUSH" },
+        ...(assigned.driver!.user.email ? [{ userId: assigned.driver!.userId, channel: "EMAIL" as const, ...transactionalEmailContent({ template: "dispatch-assignment", rideReference: `LSR-${assigned.id.slice(0, 8).toUpperCase()}`, pickup: assigned.pickupAddress }) }] : []),
         { ...passengerNotice, channel: "IN_APP" }, { ...passengerNotice, channel: "PUSH" }
       ] }).catch(() => undefined);
       return assigned;

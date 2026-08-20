@@ -50,11 +50,21 @@ services:
         generateValue: true
       - key: PAYMENTS_ENABLED
         value: "false"
+      - key: KYC_STORAGE_PROVIDER
+        value: disabled
+      - key: KYC_SCANNER_PROVIDER
+        value: disabled
+      - key: KYC_FICTIONAL_ONLY
+        value: "true"
+      - key: KYC_UPLOAD_MAX_BYTES
+        value: "5242880"
       - key: NOTIFICATION_PROVIDER
         value: sandbox
       - key: EMAIL_PROVIDER
         value: hooks
       - key: EMAIL_FROM
+        sync: false
+      - key: EMAIL_REPLY_TO
         sync: false
       - key: RESEND_API_KEY
         sync: false

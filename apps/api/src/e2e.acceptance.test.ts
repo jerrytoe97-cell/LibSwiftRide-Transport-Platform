@@ -112,9 +112,8 @@ describe.sequential("end-to-end acceptance", () => {
     expect(driverLogin.body.mfaRequired).toBeUndefined();
     const onboarded = await request(app).post("/api/v1/drivers/onboarding").set("authorization", `Bearer ${driverToken}`).send({ licenseNumber: `LIC-${suffix}`, nationalIdRef: `test-id-${suffix}` }).expect(200);
     driverId = onboarded.body.data.id;
-    for (const type of ["NATIONAL_ID", "DRIVER_LICENSE", "PROFILE_PHOTO"]) {
-      await request(app).put(`/api/v1/drivers/kyc/documents/${type}`).set("authorization", `Bearer ${driverToken}`).send({ storageKey: `acceptance/${suffix}/${type}`, mimeType: "image/jpeg", checksum: "a".repeat(64) }).expect(200);
-    }
+    const kycCase = await prisma.kycCase.findUniqueOrThrow({ where: { driverId } });
+    await prisma.kycDocument.createMany({ data: ["DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "PROFILE_PHOTO"].map((type) => ({ kycCaseId: kycCase.id, type: type as "DRIVER_LICENSE", storageKey: `acceptance-fictional/${suffix}/${type}`, mimeType: "image/jpeg", sizeBytes: 4, checksum: "a".repeat(64), scanStatus: "CLEAN", scannedAt: new Date() })) });
     const submitted = await request(app).post("/api/v1/drivers/kyc/submit").set("authorization", `Bearer ${driverToken}`).expect(200);
     await request(app).post(`/api/v1/admin/kyc/${submitted.body.data.id}/review`).set("authorization", `Bearer ${adminToken}`).send({ decision: "APPROVED" }).expect(200);
     await prisma.vehicle.create({ data: { driverId, make: "Toyota", model: "Prius", year: 2022, color: "White", plateNumber: `T${suffix.slice(-6)}` } });

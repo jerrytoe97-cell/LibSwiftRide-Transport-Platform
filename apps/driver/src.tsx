@@ -24,8 +24,9 @@ type AvailabilityWindow = { id: string; startsAt: string; endsAt: string };
 type RideHistory = { id: string; status: string; pickupAddress: string; destinationAddress: string; driverEarningsMinor: number; completedAt: string | null };
 type ChatMessage = { id: string; senderId: string; content: string; createdAt: string };
 type Incentive = { id: string; name: string; minimumRides: number; bonusMinor: number; completedRides: number; awarded: boolean; endsAt: string };
-type Onboarding = { id: string; onboardingStep: string; verifiedAt: string | null; status: string; kycCase: { status: string; rejectionCode: string | null; rejectionNotes: string | null; documents: Array<{ type: string }> } | null; vehicle: { make: string; model: string; plateNumber: string; active: boolean } | null };
-type PhotoPreview = { name: string; url: string };
+type KycDocumentType = "DRIVER_LICENSE" | "VEHICLE_REGISTRATION" | "INSURANCE" | "INSPECTION" | "PROFILE_PHOTO";
+type Onboarding = { id: string; onboardingStep: string; verifiedAt: string | null; status: string; kycCase: { status: string; rejectionCode: string | null; rejectionNotes: string | null; documents: Array<{ type: string; sizeBytes: number; scanStatus: string }> } | null; vehicle: { make: string; model: string; plateNumber: string; active: boolean } | null };
+type KycUploadConfig = { enabled: boolean; fictionalOnly: boolean; maxBytes: number; mimeTypes: string[] };
 
 const nextStatus: Record<string, string> = {
   DRIVER_ASSIGNED: "DRIVER_ARRIVING",
@@ -53,30 +54,43 @@ function App() {
   const [licenseNumber, setLicenseNumber] = useState("");
   const [nationalIdRef, setNationalIdRef] = useState("");
   const [offerSeconds, setOfferSeconds] = useState(60);
-  const [profilePhoto, setProfilePhoto] = useState<PhotoPreview | null>(null);
-  const [vehiclePhoto, setVehiclePhoto] = useState<PhotoPreview | null>(null);
+  const [kycUploadConfig, setKycUploadConfig] = useState<KycUploadConfig | null>(null);
+  const [fictionalConfirmed, setFictionalConfirmed] = useState(false);
+  const [uploadingType, setUploadingType] = useState<KycDocumentType | null>(null);
   const socket = useRef<WebSocket | null>(null);
   const stopLocationTracking = useRef<(() => Promise<void>) | null>(null);
   const lastLocationSentAt = useRef(0);
 
-  function selectPhoto(file: File | undefined, current: PhotoPreview | null, update: (photo: PhotoPreview | null) => void) {
-    if (!file) return;
-    if (!['image/jpeg', 'image/png'].includes(file.type)) {
-      setMessage("Choose a JPEG or PNG photo.");
-      return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      setMessage("Photo must be 5 MB or smaller.");
-      return;
-    }
-    if (current) URL.revokeObjectURL(current.url);
-    update({ name: file.name, url: URL.createObjectURL(file) });
-    setMessage("Photo preview is ready on this device. It has not been uploaded.");
+  async function uploadKycDocument(type: KycDocumentType, file: File | undefined) {
+    if (!file || !kycUploadConfig) return;
+    if (!fictionalConfirmed) return setMessage("Confirm that this is a fictional staging document before uploading.");
+    if (!kycUploadConfig.mimeTypes.includes(file.type)) return setMessage("Choose a JPEG, PNG, or PDF file.");
+    if (file.size > kycUploadConfig.maxBytes) return setMessage(`File must be ${Math.floor(kycUploadConfig.maxBytes / 1024 / 1024)} MB or smaller.`);
+    setUploadingType(type); setMessage(`Securely uploading ${file.name}…`);
+    try {
+      const checksum = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()))).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+      const intent = await apiClient.request<{ data: { storageKey: string; uploadUrl: string; requiredHeaders: Record<string, string> } }>("/drivers/kyc/uploads", { method: "POST", body: JSON.stringify({ type, mimeType: file.type, sizeBytes: file.size, fictionalDocument: true }) });
+      const uploaded = await fetch(intent.data.uploadUrl, { method: "PUT", headers: intent.data.requiredHeaders, body: file });
+      if (!uploaded.ok) throw new Error("Private storage rejected the upload. Check bucket CORS and try again.");
+      await apiClient.request("/drivers/kyc/uploads/complete", { method: "POST", body: JSON.stringify({ type, storageKey: intent.data.storageKey, mimeType: file.type, sizeBytes: file.size, checksum }) });
+      setMessage(`${file.name} uploaded and passed staging security scanning.`);
+      await load();
+    } catch (error) { setMessage((error as Error).message); }
+    finally { setUploadingType(null); }
+  }
+
+  async function submitKyc() {
+    try { await apiClient.request("/drivers/kyc/submit", { method: "POST", body: "{}" }); await load(); setMessage("Verification submitted for Admin review."); }
+    catch (error) { setMessage((error as Error).message); }
   }
 
   async function load() {
     if (!apiClient.hasSession()) return;
-    const onboardingResponse = await apiClient.request<{ data: Onboarding | null }>("/drivers/me/onboarding");
+    const [onboardingResponse, uploadConfigResponse] = await Promise.all([
+      apiClient.request<{ data: Onboarding | null }>("/drivers/me/onboarding"),
+      apiClient.request<{ data: KycUploadConfig }>("/drivers/kyc/uploads/config")
+    ]);
+    setKycUploadConfig(uploadConfigResponse.data);
     setOnboarding(onboardingResponse.data);
     if (!onboardingResponse.data) {
       setDashboard(null);
@@ -121,9 +135,6 @@ function App() {
       void stopLocationTracking.current?.();
     };
   }, []);
-
-  useEffect(() => () => { if (profilePhoto) URL.revokeObjectURL(profilePhoto.url); }, [profilePhoto?.url]);
-  useEffect(() => () => { if (vehiclePhoto) URL.revokeObjectURL(vehiclePhoto.url); }, [vehiclePhoto?.url]);
 
   useEffect(() => {
     if (dashboard?.activeRide?.status !== "DRIVER_ASSIGNED") {
@@ -281,23 +292,31 @@ function App() {
           <div className={onboarding.kycCase?.status === "APPROVED" ? "complete" : ""}><span>{onboarding.kycCase?.status === "APPROVED" ? "✓" : "○"}</span><strong>Admin approval</strong><small>{onboarding.kycCase?.status === "SUBMITTED" ? "Under review" : "Pending"}</small></div>
         </div>
         {onboarding.kycCase?.rejectionNotes && <p className="notice error">{onboarding.kycCase.rejectionNotes}</p>}
-        <div className="photo-capture-grid">
-          <label className="photo-capture-card">
-            <strong>Driver profile photo</strong>
-            <span>Use a clear, front-facing photo without sunglasses or filters.</span>
-            {profilePhoto ? <img src={profilePhoto.url} alt="Selected driver profile preview" /> : <div className="photo-placeholder">Your face should be clearly visible</div>}
-            <input type="file" accept="image/jpeg,image/png" capture="user" onChange={(event) => selectPhoto(event.target.files?.[0], profilePhoto, setProfilePhoto)} />
-            {profilePhoto && <small>{profilePhoto.name} · local preview only</small>}
-          </label>
-          <label className="photo-capture-card">
-            <strong>Vehicle exterior photo</strong>
-            <span>Show the full vehicle, colour, condition, and licence plate.</span>
-            {vehiclePhoto ? <img src={vehiclePhoto.url} alt="Selected vehicle preview" /> : <div className="photo-placeholder">Photograph the vehicle in good lighting</div>}
-            <input type="file" accept="image/jpeg,image/png" capture="environment" onChange={(event) => selectPhoto(event.target.files?.[0], vehiclePhoto, setVehiclePhoto)} />
-            {vehiclePhoto && <small>{vehiclePhoto.name} · local preview only</small>}
-          </label>
+        {!kycUploadConfig?.enabled && <p className="notice error">Private document storage and scanning are not configured. Upload is safely disabled.</p>}
+        {kycUploadConfig?.fictionalOnly && <p className="notice"><strong>Staging test only:</strong> upload fictional documents containing no real identity, licence, insurance, address, or vehicle information.</p>}
+        <label className="consent-row"><input type="checkbox" checked={fictionalConfirmed} onChange={(event) => setFictionalConfirmed(event.target.checked)} /> I confirm every file is fictional test data.</label>
+        <div className="kyc-upload-grid">
+          {([[
+            "DRIVER_LICENSE", "Driver licence", "Photograph or select a fictional driver licence.", undefined
+          ], [
+            "VEHICLE_REGISTRATION", "Vehicle registration", "Select a fictional registration document.", undefined
+          ], [
+            "INSURANCE", "Insurance document", "Select a fictional insurance document.", undefined
+          ], [
+            "INSPECTION", "Vehicle photo / inspection", "Show a fictional test vehicle in good lighting.", "environment"
+          ], [
+            "PROFILE_PHOTO", "Profile photo", "Use a fictional test portrait; do not upload a real person.", "user"
+          ]] as const).map(([type, label, help, capture]) => {
+            const document = onboarding.kycCase?.documents.find((item) => item.type === type);
+            return <label className="kyc-upload-card" key={type}>
+              <strong>{label}</strong><span>{help}</span>
+              <small>{document?.scanStatus === "CLEAN" ? `Security scan passed · ${Math.ceil(document.sizeBytes / 1024)} KB` : "Required · JPEG, PNG, or PDF"}</small>
+              <input type="file" accept={kycUploadConfig?.mimeTypes.join(",") ?? "image/jpeg,image/png,application/pdf"} capture={capture} disabled={!kycUploadConfig?.enabled || !fictionalConfirmed || uploadingType !== null || onboarding.kycCase?.status === "SUBMITTED"} onChange={(event) => { void uploadKycDocument(type, event.target.files?.[0]); event.currentTarget.value = ""; }} />
+              {uploadingType === type && <span role="status">Uploading and scanning…</span>}
+            </label>;
+          })}
         </div>
-        <p className="notice">Secure document upload remains unavailable until private KYC storage and malware scanning are configured. Do not send identity documents through email or chat.</p>
+        <Action disabled={onboarding.kycCase?.status === "SUBMITTED" || uploadingType !== null || !(["DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "PROFILE_PHOTO"] as const).every((type) => onboarding.kycCase?.documents.some((document) => document.type === type && document.scanStatus === "CLEAN"))} onClick={submitKyc}>Submit for Admin review</Action>
       </section>}
       <div hidden={onboarding === null}>
       {incomingRide && <section className="incoming-ride" aria-live="assertive">

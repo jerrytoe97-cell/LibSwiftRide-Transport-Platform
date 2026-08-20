@@ -2,6 +2,7 @@ import type { NotificationChannel, Prisma } from "@prisma/client";
 import { prisma } from "../lib.js";
 import { config } from "../config.js";
 import { resilientFetch } from "./http-client.js";
+import { renderTransactionalEmailHtml } from "./transactional-email-templates.js";
 
 export async function queueNotification(input: {
   userId: string;
@@ -30,7 +31,7 @@ const delivery = {
 
 const RESEND_EMAIL_URL = "https://api.resend.com/emails";
 
-export function createResendEmailRequest(input: { id: string; to: string; title: string; body: string }, apiKey: string, from: string) {
+export function createResendEmailRequest(input: { id: string; to: string; title: string; body: string }, apiKey: string, from: string, replyTo: string) {
   return {
     url: RESEND_EMAIL_URL,
     init: {
@@ -40,7 +41,7 @@ export function createResendEmailRequest(input: { id: string; to: string; title:
         "content-type": "application/json",
         "idempotency-key": input.id
       },
-      body: JSON.stringify({ from, to: [input.to], subject: input.title, text: input.body }),
+      body: JSON.stringify({ from: `LibSwiftRide Support <${from}>`, reply_to: replyTo, to: [input.to], subject: input.title, text: input.body, html: renderTransactionalEmailHtml(input.title, input.body) }),
       timeoutMs: 8_000,
       attempts: 2
     }
@@ -57,8 +58,8 @@ export async function deliverPendingNotifications(limit = 25) {
       }
       continue;
     }
-    const resend = notification.channel === "EMAIL" && config.EMAIL_PROVIDER === "resend" && notification.user.email && config.RESEND_API_KEY && config.EMAIL_FROM
-      ? createResendEmailRequest({ id: notification.id, to: notification.user.email, title: notification.title, body: notification.body }, config.RESEND_API_KEY, config.EMAIL_FROM)
+    const resend = notification.channel === "EMAIL" && config.EMAIL_PROVIDER === "resend" && notification.user.email && config.RESEND_API_KEY && config.EMAIL_FROM && config.EMAIL_REPLY_TO
+      ? createResendEmailRequest({ id: notification.id, to: notification.user.email, title: notification.title, body: notification.body }, config.RESEND_API_KEY, config.EMAIL_FROM, config.EMAIL_REPLY_TO)
       : null;
     const provider = delivery[notification.channel as keyof typeof delivery];
     if (!resend && (!provider?.url || !provider.token)) continue;
@@ -74,7 +75,7 @@ export async function deliverPendingNotifications(limit = 25) {
         attempts: 2
       });
       if (!response.ok) throw new Error(`Delivery returned ${response.status}`);
-      await prisma.notification.update({ where: { id: notification.id }, data: { status: "SENT", sentAt: new Date() } });
+      await prisma.notification.update({ where: { id: notification.id }, data: { status: "SENT", sentAt: new Date(), ...(notification.template === "password-reset" ? { body: "Sensitive password-reset instructions were delivered and removed from the queue." } : {}) } });
     } catch {
       const attemptCount = notification.attemptCount + 1;
       await prisma.notification.update({ where: { id: notification.id }, data: { status: "FAILED", attemptCount: { increment: 1 }, nextAttemptAt: attemptCount < 5 ? new Date(Date.now() + Math.min(15 * 60_000, 2 ** attemptCount * 30_000)) : null } });

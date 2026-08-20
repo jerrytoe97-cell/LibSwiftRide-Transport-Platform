@@ -1,0 +1,7 @@
+ALTER TABLE "KycDocument"
+ADD COLUMN "sizeBytes" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "scanStatus" TEXT NOT NULL DEFAULT 'QUARANTINED',
+ADD COLUMN "scannedAt" TIMESTAMP(3),
+ADD COLUMN "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+CREATE INDEX "KycDocument_scanStatus_createdAt_idx" ON "KycDocument"("scanStatus", "createdAt");

@@ -854,13 +854,18 @@ model KycDocument {
   storageKey           String
   mimeType             String
   checksum             String
+  sizeBytes            Int
+  scanStatus           String          @default("QUARANTINED")
+  scannedAt            DateTime?
   expiresAt            DateTime?
   verifiedAt           DateTime?
   expiryReminderSentAt DateTime?
   createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
 
   @@unique([kycCaseId, type])
   @@index([expiryReminderSentAt, expiresAt])
+  @@index([scanStatus, createdAt])
 }
 
 model CouponCampaign {

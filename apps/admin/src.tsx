@@ -31,7 +31,7 @@ type OperationsReport = {
 type Promotion = { id: string; code: string; description: string; active: boolean; uses: number; maxUses: number | null; expiresAt: string };
 type Passenger = { id: string; firstName: string; lastName: string; phone: string; status: string; _count: { rides: number } };
 type Review = { id: string; score: number; comment: string | null; author: { firstName: string; lastName: string }; subject: { firstName: string; lastName: string } };
-type KycCase = { id: string; driver: { user: { firstName: string; lastName: string } }; submittedAt: string };
+type KycCase = { id: string; driver: { user: { firstName: string; lastName: string } }; submittedAt: string; documents: Array<{ id: string; type: string; mimeType: string; sizeBytes: number; scanStatus: string }> };
 type Analytics = {
   rides: { total: number; completed: number; cancelled: number; uniquePassengers: number; activeDrivers: number; averageAcceptanceSec: number | null; averageTripSec: number | null };
   revenue: { discountsMinor: number; waitingFeesMinor: number; tollsMinor: number };
@@ -99,8 +99,19 @@ function App() {
   }
 
   async function reviewKyc(id: string, decision: "APPROVED" | "REJECTED") {
-    await apiClient.request(`/admin/kyc/${id}/review`, { method: "POST", body: JSON.stringify({ decision, ...(decision === "REJECTED" ? { rejectionCode: "DOCUMENT_REVIEW_REQUIRED" } : {}) }) });
-    window.location.reload();
+    try {
+      await apiClient.request(`/admin/kyc/${id}/review`, { method: "POST", body: JSON.stringify({ decision, ...(decision === "REJECTED" ? { rejectionCode: "DOCUMENT_REVIEW_REQUIRED", rejectionNotes: "One or more fictional staging documents require correction." } : {}) }) });
+      window.location.reload();
+    } catch (requestError) { setError((requestError as Error).message); }
+  }
+
+  async function openKycDocument(documentId: string) {
+    try {
+      const response = await apiClient.request<{ data: { url: string } }>(`/admin/kyc/documents/${documentId}/access`, { method: "POST", body: "{}" });
+      const link = document.createElement("a");
+      link.href = response.data.url; link.target = "_blank"; link.rel = "noopener noreferrer";
+      document.body.appendChild(link); link.click(); link.remove();
+    } catch (requestError) { setError((requestError as Error).message); }
   }
 
   async function sendBroadcast() {
@@ -217,7 +228,12 @@ function App() {
       </section>
       <section className="panel">
         <h2>Driver approvals</h2>
-        {kycCases.map((kyc) => <div className="toolbar" key={kyc.id}><span>{kyc.driver.user.firstName} {kyc.driver.user.lastName}</span><span><button className="action" onClick={() => reviewKyc(kyc.id, "APPROVED")}>Approve</button> <button className="link-button" onClick={() => reviewKyc(kyc.id, "REJECTED")}>Reject</button></span></div>)}
+        <p>Open every restricted document before deciding. Access links expire after two minutes and every view is audited.</p>
+        {kycCases.map((kyc) => <article className="kyc-review-card" key={kyc.id}>
+          <div className="toolbar"><strong>{kyc.driver.user.firstName} {kyc.driver.user.lastName}</strong><small>Submitted {new Date(kyc.submittedAt).toLocaleString("en-LR")}</small></div>
+          <div className="kyc-review-documents">{kyc.documents.map((document) => <div className="mini-row" key={document.id}><span>{document.type.replaceAll("_", " ")} · {Math.ceil(document.sizeBytes / 1024)} KB · {document.scanStatus}</span><button className="link-button" disabled={document.scanStatus !== "CLEAN"} onClick={() => openKycDocument(document.id)}>Open securely</button></div>)}</div>
+          <div><button className="action" onClick={() => reviewKyc(kyc.id, "APPROVED")}>Approve</button> <button className="link-button" onClick={() => reviewKyc(kyc.id, "REJECTED")}>Reject</button></div>
+        </article>)}
         {!kycCases.length && <p>No submitted driver cases.</p>}
       </section>
       <section className="panel">
