@@ -83,12 +83,22 @@ services:
       - key: NOTIFICATION_PROVIDER
         value: hooks
       - key: EMAIL_PROVIDER
-        value: resend
+        value: zoho
       - key: EMAIL_FROM
         value: support@libswiftride.com
       - key: EMAIL_REPLY_TO
         value: support@libswiftride.com
       - key: RESEND_API_KEY
+        sync: false
+      - key: ZOHO_SMTP_HOST
+        value: smtppro.zoho.com
+      - key: ZOHO_SMTP_PORT
+        value: "465"
+      - key: ZOHO_SMTP_SECURE
+        value: "true"
+      - key: ZOHO_SMTP_USER
+        value: support@libswiftride.com
+      - key: ZOHO_SMTP_APP_PASSWORD
         sync: false
       - key: PAYMENT_PROVIDER
         value: sandbox

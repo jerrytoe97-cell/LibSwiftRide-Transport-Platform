@@ -3,6 +3,7 @@ import { z } from "zod";
 
 const optionalUrl = z.preprocess((value) => value === "" ? undefined : value, z.string().url().optional());
 const optionalSecret = z.preprocess((value) => value === "" ? undefined : value, z.string().min(16).optional());
+const optionalZohoCredential = z.preprocess((value) => value === "" ? undefined : value, z.string().min(12).optional());
 const optionalMobileMoneyNumber = z.preprocess(
   (value) => value === "" ? undefined : value,
   z.string().regex(/^0\d{9}$/, "Mobile Money numbers must be 10-digit local numbers").optional()
@@ -29,10 +30,15 @@ export const environmentSchema = z.object({
   PAYMENT_PROVIDER: z.enum(["sandbox", "mobile-money"]).default("sandbox"),
   PAYMENT_WEBHOOK_SECRET: z.string().min(16),
   NOTIFICATION_PROVIDER: z.enum(["sandbox", "hooks"]).default("sandbox"),
-  EMAIL_PROVIDER: z.enum(["hooks", "resend"]).default("hooks"),
+  EMAIL_PROVIDER: z.enum(["hooks", "resend", "zoho"]).default("hooks"),
   EMAIL_FROM: z.preprocess((value) => value === "" ? undefined : value, z.email().optional()),
   EMAIL_REPLY_TO: z.preprocess((value) => value === "" ? undefined : value, z.email().optional()),
   RESEND_API_KEY: optionalSecret,
+  ZOHO_SMTP_HOST: z.string().min(1).default("smtppro.zoho.com"),
+  ZOHO_SMTP_PORT: z.coerce.number().int().min(1).max(65_535).default(465),
+  ZOHO_SMTP_SECURE: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
+  ZOHO_SMTP_USER: z.preprocess((value) => value === "" ? undefined : value, z.email().optional()),
+  ZOHO_SMTP_APP_PASSWORD: optionalZohoCredential,
   ORANGE_MONEY_API_URL: optionalUrl,
   ORANGE_MONEY_API_TOKEN: optionalSecret,
   ORANGE_MONEY_NUMBER: optionalMobileMoneyNumber,
@@ -80,6 +86,12 @@ export const environmentSchema = z.object({
     if (environment.EMAIL_PROVIDER === "resend" && (!environment.RESEND_API_KEY || !environment.EMAIL_FROM || !environment.EMAIL_REPLY_TO)) {
       context.addIssue({ code: "custom", path: ["RESEND_API_KEY"], message: "RESEND_API_KEY, EMAIL_FROM and EMAIL_REPLY_TO are required for Resend email delivery" });
     }
+    if (environment.EMAIL_PROVIDER === "zoho" && (!environment.ZOHO_SMTP_USER || !environment.ZOHO_SMTP_APP_PASSWORD || !environment.EMAIL_FROM || !environment.EMAIL_REPLY_TO)) {
+      context.addIssue({ code: "custom", path: ["ZOHO_SMTP_USER"], message: "ZOHO_SMTP_USER, ZOHO_SMTP_APP_PASSWORD, EMAIL_FROM and EMAIL_REPLY_TO are required for Zoho email delivery" });
+    }
+    if (environment.EMAIL_PROVIDER === "zoho" && environment.ZOHO_SMTP_PORT === 465 && !environment.ZOHO_SMTP_SECURE) {
+      context.addIssue({ code: "custom", path: ["ZOHO_SMTP_SECURE"], message: "Zoho SMTP port 465 requires implicit TLS" });
+    }
   }
   if (environment.NODE_ENV === "production" && environment.PAYMENTS_ENABLED && environment.PAYMENT_PROVIDER !== "mobile-money") {
     context.addIssue({ code: "custom", path: ["PAYMENT_PROVIDER"], message: "Production payments require PAYMENT_PROVIDER=mobile-money" });
@@ -122,7 +134,7 @@ export const environmentSchema = z.object({
     if (environment.ROUTING_PROVIDER === "mapbox" && !environment.MAPBOX_ROUTING_TOKEN) {
       context.addIssue({ code: "custom", path: ["MAPBOX_ROUTING_TOKEN"], message: "MAPBOX_ROUTING_TOKEN is required when ROUTING_PROVIDER=mapbox" });
     }
-    for (const [field, secret] of [["JWT_ACCESS_SECRET", environment.JWT_ACCESS_SECRET], ["JWT_REFRESH_SECRET", environment.JWT_REFRESH_SECRET], ["PAYMENT_WEBHOOK_SECRET", environment.PAYMENT_WEBHOOK_SECRET], ["MFA_ENCRYPTION_KEY", environment.MFA_ENCRYPTION_KEY ?? ""], ["RESEND_API_KEY", environment.RESEND_API_KEY ?? ""]] as const) {
+    for (const [field, secret] of [["JWT_ACCESS_SECRET", environment.JWT_ACCESS_SECRET], ["JWT_REFRESH_SECRET", environment.JWT_REFRESH_SECRET], ["PAYMENT_WEBHOOK_SECRET", environment.PAYMENT_WEBHOOK_SECRET], ["MFA_ENCRYPTION_KEY", environment.MFA_ENCRYPTION_KEY ?? ""], ["RESEND_API_KEY", environment.RESEND_API_KEY ?? ""], ["ZOHO_SMTP_APP_PASSWORD", environment.ZOHO_SMTP_APP_PASSWORD ?? ""]] as const) {
       if (/replace|example|change|development|test-secret/i.test(secret)) {
         context.addIssue({ code: "custom", path: [field], message: `${field} contains a placeholder value` });
       }

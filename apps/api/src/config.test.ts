@@ -58,6 +58,34 @@ describe("production environment safeguards", () => {
       NOTIFICATION_PROVIDER: "hooks",
       EMAIL_PROVIDER: "hooks"
     })).toThrow("Invalid environment");
+    expect(parseEnvironment({
+      ...production,
+      NOTIFICATION_PROVIDER: "hooks",
+      EMAIL_PROVIDER: "zoho",
+      EMAIL_FROM: "support@libswiftride.com",
+      EMAIL_REPLY_TO: "support@libswiftride.com",
+      ZOHO_SMTP_USER: "support@libswiftride.com",
+      ZOHO_SMTP_APP_PASSWORD: "123456789012"
+    })).toMatchObject({ EMAIL_PROVIDER: "zoho", ZOHO_SMTP_HOST: "smtppro.zoho.com", ZOHO_SMTP_PORT: 465, ZOHO_SMTP_SECURE: true });
+    expect(() => parseEnvironment({
+      ...production,
+      NOTIFICATION_PROVIDER: "hooks",
+      EMAIL_PROVIDER: "zoho",
+      EMAIL_FROM: "support@libswiftride.com",
+      EMAIL_REPLY_TO: "support@libswiftride.com",
+      ZOHO_SMTP_USER: "support@libswiftride.com"
+    })).toThrow("Invalid environment");
+    expect(() => parseEnvironment({
+      ...production,
+      NOTIFICATION_PROVIDER: "hooks",
+      EMAIL_PROVIDER: "zoho",
+      EMAIL_FROM: "support@libswiftride.com",
+      EMAIL_REPLY_TO: "support@libswiftride.com",
+      ZOHO_SMTP_USER: "support@libswiftride.com",
+      ZOHO_SMTP_APP_PASSWORD: "123456789012",
+      ZOHO_SMTP_PORT: "465",
+      ZOHO_SMTP_SECURE: "false"
+    })).toThrow("Invalid environment");
   });
 
   it("allows sandbox KYC scanning only for fictional documents with complete private storage configuration", () => {
