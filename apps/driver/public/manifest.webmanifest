@@ -1,0 +1,15 @@
+{
+  "name": "LibSwiftRide Driver",
+  "short_name": "LSR Driver",
+  "description": "Driver trips, live GPS, navigation and earnings for LibSwiftRide Liberia.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f9fc",
+  "theme_color": "#0c2454",
+  "orientation": "portrait-primary",
+  "categories": ["navigation", "business", "travel"],
+  "icons": [
+    { "src": "/app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

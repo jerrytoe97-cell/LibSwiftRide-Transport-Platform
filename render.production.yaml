@@ -1,0 +1,100 @@
+databases:
+  - name: libswiftride-production-postgres
+    plan: basic-1gb
+    region: frankfurt
+    databaseName: libswiftride
+    user: libswiftride
+    postgresMajorVersion: "17"
+    ipAllowList: []
+    storageAutoscalingEnabled: true
+
+services:
+  - type: keyvalue
+    name: libswiftride-production-redis
+    plan: starter
+    region: frankfurt
+    ipAllowList: []
+    maxmemoryPolicy: allkeys-lru
+    persistenceMode: journal-snapshot
+
+  - type: web
+    name: libswiftride-api
+    runtime: docker
+    plan: standard
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
+    dockerCommand: node apps/api/dist/server.js
+    preDeployCommand: node apps/api/node_modules/prisma/build/index.js migrate deploy --schema apps/api/prisma/schema.prisma
+    healthCheckPath: /health/ready
+    autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: API_PORT
+        value: "10000"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: libswiftride-production-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: libswiftride-production-redis
+          property: connectionString
+      - key: CORS_ORIGINS
+        sync: false
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: MFA_ENCRYPTION_KEY
+        generateValue: true
+      - key: PAYMENT_WEBHOOK_SECRET
+        generateValue: true
+      - key: METRICS_TOKEN
+        generateValue: true
+      - key: ROUTING_PROVIDER
+        value: mapbox
+      - key: ROUTING_API_URL
+        value: https://api.mapbox.com/directions/v5/mapbox/driving
+      - key: MAPBOX_ROUTING_TOKEN
+        sync: false
+      - key: ROUTE_POINT_RETENTION_DAYS
+        value: "30"
+      - key: NOTIFICATION_PROVIDER
+        value: hooks
+      - key: EMAIL_PROVIDER
+        value: zoho
+      - key: EMAIL_FROM
+        value: support@libswiftride.com
+      - key: EMAIL_REPLY_TO
+        value: support@libswiftride.com
+      - key: ZOHO_SMTP_HOST
+        value: smtppro.zoho.com
+      - key: ZOHO_SMTP_PORT
+        value: "465"
+      - key: ZOHO_SMTP_SECURE
+        value: "true"
+      - key: ZOHO_SMTP_USER
+        value: support@libswiftride.com
+      - key: ZOHO_SMTP_APP_PASSWORD
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: PAYMENTS_ENABLED
+        value: "false"
+      - key: PAYMENT_PROVIDER
+        value: sandbox
+      - key: ORANGE_MONEY_NUMBER
+        sync: false
+      - key: MTN_MOMO_NUMBER
+        sync: false
+      - key: KYC_STORAGE_PROVIDER
+        value: disabled
+      - key: KYC_SCANNER_PROVIDER
+        value: disabled
+      - key: KYC_FICTIONAL_ONLY
+        value: "true"
+      - key: KYC_UPLOAD_MAX_BYTES
+        value: "5242880"

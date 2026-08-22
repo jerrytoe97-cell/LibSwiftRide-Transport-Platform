@@ -35,10 +35,10 @@ Cancellation may occur before completion. Every transition must validate the act
 
 For a completed fare `F` in minor units:
 
-`company = round(F × 0.12)` and `driver = F − company`
+`company = round(F × 0.14)` and `driver = F − company`
 
 This guarantees allocations always sum to the collected fare. Promotions, tips, tolls, refunds, taxes, fleet fees and provider fees need separate ledger entries rather than altering this invariant.
 
 ## Scaling path
 
-Run multiple stateless API replicas behind a TLS load balancer. Use Redis pub/sub or streams to fan out WebSocket location events. Add PostGIS for spatial queries, a job queue for dispatch and notifications, read replicas for analytics, and object storage for encrypted compliance documents.
+Run multiple stateless API replicas behind a TLS load balancer. Redis pub/sub fans out ride-scoped WebSocket location and chat events across replicas, with local delivery as a temporary fallback if publishing fails. Add PostGIS for spatial queries, a job queue for dispatch and notifications, read replicas for analytics, and object storage for encrypted compliance documents.

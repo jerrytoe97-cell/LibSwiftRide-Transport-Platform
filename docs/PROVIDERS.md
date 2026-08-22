@@ -1,5 +1,13 @@
 # Provider integration contracts
 
+## Maps, routing and live GPS
+
+The device operating system supplies GPS coordinates. Mapbox is an optional paid map, routing and navigation provider; it does not replace the authenticated LibSwiftRide location stream.
+
+Mapbox remains opt-in. Set `VITE_MAP_PROVIDER=mapbox` only after billing approval and provide a dedicated public `pk.` token through `VITE_MAPBOX_ACCESS_TOKEN`. The UI refuses secret `sk.` tokens and otherwise keeps the OpenStreetMap preview. Use separate tokens for web, Android and iOS. Restrict the web token to approved HTTPS origins and least-privilege read scopes; native tokens cannot use web URL restrictions and must be isolated per mobile environment.
+
+Do not commit tokens. Configure account spending alerts and usage monitoring before staging. Production routing must use an approved server-side adapter with timeouts, retry limits and usage metrics; it must not silently fall back to the public OSRM demonstration endpoint. GPS authorization, trip-scoped WebSocket subscriptions and route-point retention remain enforced by LibSwiftRide regardless of the selected map provider.
+
 ## Payments
 
 Orange Money Liberia, Lonestar Cell MTN Mobile Money and Stripe connect through the payment adapter. They are disabled by default. After official credentials and staging certification are supplied, configure the relevant endpoint and bearer token, set `PAYMENT_PROVIDER=mobile-money`, and explicitly set `PAYMENTS_ENABLED=true`. Requests include integer minor units, currency, phone where applicable, return URL and an idempotency key.
@@ -29,3 +37,19 @@ Delivery hooks accept authenticated POST requests containing notification ID, ch
 - Push destinations come from active registered devices.
 
 Production delivery hooks must suppress secrets in logs, sign callbacks, implement retry/backoff and expose delivery receipts. Failed database notification rows are visible to operations for replay.
+
+### Password-reset email delivery
+
+Production-equivalent deployments default to `NOTIFICATION_PROVIDER=sandbox`, which deliberately sends no external email. To use the existing authenticated webhook adapter, set `NOTIFICATION_PROVIDER=hooks`, `EMAIL_PROVIDER=hooks`, `EMAIL_DELIVERY_URL` and `EMAIL_DELIVERY_TOKEN` in the deployment secret manager.
+
+The API retains its opt-in direct Resend HTTPS adapter. Set `NOTIFICATION_PROVIDER=hooks`, `EMAIL_PROVIDER=resend`, `EMAIL_FROM=support@libswiftride.com`, `EMAIL_REPLY_TO=support@libswiftride.com`, and `RESEND_API_KEY` to a restricted protected API key. The API sends branded HTML plus accessible plain text through `https://api.resend.com/emails` with bearer authentication and the notification ID as the idempotency key.
+
+Production selects Zoho Mail SMTP so the verified `libswiftride.com` mailbox identity handles both sending and receiving. Set `NOTIFICATION_PROVIDER=hooks`, `EMAIL_PROVIDER=zoho`, `EMAIL_FROM=support@libswiftride.com`, `EMAIL_REPLY_TO=support@libswiftride.com`, `ZOHO_SMTP_HOST`, `ZOHO_SMTP_PORT`, `ZOHO_SMTP_SECURE`, `ZOHO_SMTP_USER`, and the protected `ZOHO_SMTP_APP_PASSWORD`. Port 465 uses implicit TLS (`ZOHO_SMTP_SECURE=true`); port 587 uses STARTTLS (`ZOHO_SMTP_SECURE=false`). Both modes require TLS 1.2 or newer, authenticated sending, and certificate validation. Use the exact SMTP host shown in the Zoho account because it can vary by account type or data center. The sender must be the authenticated mailbox or one of its configured aliases.
+
+Keep `support@libswiftride.com` as the primary mailbox and sender/reply-to. Preserve `admin@libswiftride.com`, `info@libswiftride.com`, and `fleet@libswiftride.com` as Zoho aliases or mailboxes; the application does not need their credentials. Do not place provider credentials in source, frontend variables, logs, screenshots, or Render Blueprint values. Resend remains available as a rollback provider by changing `EMAIL_PROVIDER` back to `resend`; it has not been removed.
+
+Before production activation, verify the domain, MX records, a single combined SPF record, DKIM, and DMARC in Zoho and the DNS provider. Generate a dedicated 12-digit Zoho app password for `support@libswiftride.com` when two-factor authentication is enabled, and enter it without spaces. Store it only as Render's secret `ZOHO_SMTP_APP_PASSWORD`. Provider activation, sending-limit approval, DNS propagation, and test-recipient evidence remain deployment-owner actions.
+
+Customer-facing password, account-security, driver onboarding/KYC, booking and cancellation messages use the Support sender and Reply-To address. Operational aliases such as `dispatch@`, `fleet@`, `admin@`, and `info@libswiftride.com` remain available for staffed human correspondence; they are not application credentials and are not hard-coded as provider senders.
+
+Password-reset requests remain enumeration-safe and return `202` whether an account exists, token creation succeeds, or queueing succeeds. A newly issued 64-character token invalidates earlier unused reset tokens; the verification table stores only its SHA-256 hash. The notification queue retains the delivery content only while required for retries and replaces it with a non-sensitive delivery marker after Resend accepts the message. The token expires after one hour and successful use revokes all refresh sessions. Notification bodies and provider requests must never be logged.

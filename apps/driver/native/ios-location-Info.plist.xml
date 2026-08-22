@@ -1,0 +1,9 @@
+<!-- Merge these keys into the signed iOS driver application's Info.plist. -->
+<dict>
+  <key>NSLocationWhenInUseUsageDescription</key>
+  <string>LibSwiftRide uses your location while you are online to match trips and guide active rides.</string>
+  <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+  <string>During an active ride, LibSwiftRide uses background location so the passenger and authorized safety team can follow trip progress.</string>
+  <key>UIBackgroundModes</key>
+  <array><string>location</string></array>
+</dict>

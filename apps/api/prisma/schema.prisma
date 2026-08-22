@@ -14,6 +14,7 @@ enum UserRole {
   DISPATCHER
   ADMIN
   SUPPORT
+  BUSINESS_MANAGER
 }
 
 enum UserStatus {
@@ -36,9 +37,17 @@ enum RideStatus {
   DRIVER_ASSIGNED
   DRIVER_ARRIVING
   DRIVER_ARRIVED
+  PASSENGER_BOARDED
   IN_PROGRESS
   COMPLETED
   CANCELLED
+}
+
+enum RideOfferStatus {
+  OFFERED
+  ACCEPTED
+  REJECTED
+  EXPIRED
 }
 
 enum PaymentStatus {
@@ -99,136 +108,263 @@ enum KycDocumentType {
   PROFILE_PHOTO
 }
 
+enum FavouritePlaceType {
+  HOME
+  WORK
+  CUSTOM
+}
+
+enum ReviewStatus {
+  PENDING
+  PUBLISHED
+  HIDDEN
+}
+
+enum SafetyIncidentStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+enum RefundStatus {
+  REQUESTED
+  APPROVED
+  PROCESSING
+  COMPLETED
+  REJECTED
+  FAILED
+}
+
+enum PayoutStatus {
+  PENDING
+  PROCESSING
+  PAID
+  FAILED
+  CANCELLED
+}
+
+enum ServiceType {
+  RIDE
+  AIRPORT
+  CORPORATE
+}
+
+enum DeliveryStatus {
+  REQUESTED
+  ASSIGNED
+  PICKED_UP
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+}
+
 model User {
-  id           String     @id @default(uuid())
-  phone        String     @unique
-  email        String?    @unique
-  emailVerifiedAt DateTime?
-  passwordHash String
-  firstName    String
-  lastName     String
-  role         UserRole
-  status       UserStatus @default(PENDING)
-  driver       Driver?
-  fleet        Fleet?     @relation("FleetManager")
-  rides        Ride[]     @relation("PassengerRides")
-  refreshTokens RefreshToken[]
-  verificationTokens VerificationToken[]
-  wallet       Wallet?
-  ratingsGiven Rating[]    @relation("RatingAuthor")
-  ratingsReceived Rating[] @relation("RatingSubject")
-  notifications Notification[]
-  kycReviews   KycCase[] @relation("KycReviewer")
-  devices      Device[]
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  id                  String              @id @default(uuid())
+  phone               String              @unique
+  email               String?             @unique
+  emailVerifiedAt     DateTime?
+  passwordHash        String
+  firstName           String
+  lastName            String
+  role                UserRole
+  status              UserStatus          @default(PENDING)
+  locale              String              @default("en")
+  referralCode        String              @unique @default(uuid())
+  referredById        String?
+  referredBy          User?               @relation("UserReferrals", fields: [referredById], references: [id])
+  referrals           User[]              @relation("UserReferrals")
+  referralRewards     Referral[]          @relation("ReferralOwner")
+  referralRecord      Referral?           @relation("ReferredUser")
+  driver              Driver?
+  fleet               Fleet?              @relation("FleetManager")
+  rides               Ride[]              @relation("PassengerRides")
+  refreshTokens       RefreshToken[]
+  verificationTokens  VerificationToken[]
+  wallet              Wallet?
+  ratingsGiven        Rating[]            @relation("RatingAuthor")
+  ratingsReceived     Rating[]            @relation("RatingSubject")
+  notifications       Notification[]
+  kycReviews          KycCase[]           @relation("KycReviewer")
+  devices             Device[]
+  favouritePlaces     FavouritePlace[]
+  emergencyContacts   EmergencyContact[]
+  tripShares          TripShare[]         @relation("TripShareOwner")
+  chatMessages        ChatMessage[]
+  managedBusiness     CorporateAccount?   @relation("BusinessManager")
+  corporateMembership CorporateEmployee?
+  deliveries          Delivery[]          @relation("DeliveryCustomer")
+  ridePasses          RidePass[]
+  mfaCredential       MfaCredential?
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+}
+
+model MfaCredential {
+  id                 String   @id @default(uuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  encryptedSecret    String
+  recoveryCodeHashes Json
+  verifiedAt         DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 }
 
 model VerificationToken {
-  id        String   @id @default(uuid())
+  id        String    @id @default(uuid())
   userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   type      String
-  tokenHash String   @unique
+  tokenHash String    @unique
   expiresAt DateTime
   usedAt    DateTime?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
+
   @@index([userId, type, expiresAt])
 }
 
 model RefreshToken {
-  id        String   @id @default(uuid())
-  tokenHash String   @unique
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
   userId    String
   expiresAt DateTime
   revokedAt DateTime?
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+
   @@index([userId, expiresAt])
 }
 
 model Fleet {
-  id        String    @id @default(uuid())
-  name      String
-  managerId String    @unique
-  manager   User      @relation("FleetManager", fields: [managerId], references: [id])
-  drivers   Driver[]
-  vehicles  Vehicle[]
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  id         String             @id @default(uuid())
+  name       String
+  managerId  String             @unique
+  manager    User               @relation("FleetManager", fields: [managerId], references: [id])
+  drivers    Driver[]
+  vehicles   Vehicle[]
+  incentives IncentiveProgram[]
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
 }
 
 model Driver {
-  id            String       @id @default(uuid())
-  userId        String       @unique
-  user          User         @relation(fields: [userId], references: [id])
-  fleetId       String?
-  fleet         Fleet?       @relation(fields: [fleetId], references: [id])
-  status        DriverStatus @default(OFFLINE)
-  licenseNumber String       @unique
-  nationalIdRef String?
-  onboardingStep String      @default("PROFILE")
-  approvedById   String?
-  verifiedAt    DateTime?
-  rides         Ride[]
-  vehicle       Vehicle?
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
-  kycCase       KycCase?
+  id                  String               @id @default(uuid())
+  userId              String               @unique
+  user                User                 @relation(fields: [userId], references: [id])
+  fleetId             String?
+  fleet               Fleet?               @relation(fields: [fleetId], references: [id])
+  status              DriverStatus         @default(OFFLINE)
+  licenseNumber       String               @unique
+  nationalIdRef       String?
+  onboardingStep      String               @default("PROFILE")
+  approvedById        String?
+  verifiedAt          DateTime?
+  rides               Ride[]
+  vehicle             Vehicle?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  kycCase             KycCase?
+  availabilityWindows DriverAvailability[]
+  payouts             DriverPayout[]
+  incentives          DriverIncentive[]
+  deliveries          Delivery[]
+  rideOffers          RideOffer[]
 }
 
 model Vehicle {
-  id          String   @id @default(uuid())
-  fleetId     String?
-  fleet       Fleet?   @relation(fields: [fleetId], references: [id])
-  driverId    String?  @unique
-  driver      Driver?  @relation(fields: [driverId], references: [id])
-  make        String
-  model       String
-  year        Int
-  color       String
-  plateNumber String   @unique
-  active      Boolean  @default(true)
-  inspectionExpiresAt DateTime?
-  insuranceExpiresAt  DateTime?
+  id                    String    @id @default(uuid())
+  fleetId               String?
+  fleet                 Fleet?    @relation(fields: [fleetId], references: [id])
+  driverId              String?   @unique
+  driver                Driver?   @relation(fields: [driverId], references: [id])
+  make                  String
+  model                 String
+  year                  Int
+  color                 String
+  plateNumber           String    @unique
+  active                Boolean   @default(true)
+  inspectionExpiresAt   DateTime?
+  insuranceExpiresAt    DateTime?
   registrationExpiresAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
 }
 
 model Ride {
-  id                    String     @id @default(uuid())
-  passengerId           String
-  passenger             User       @relation("PassengerRides", fields: [passengerId], references: [id])
-  driverId              String?
-  driver                Driver?    @relation(fields: [driverId], references: [id])
-  status                 RideStatus @default(REQUESTED)
+  id                     String             @id @default(uuid())
+  passengerId            String
+  passenger              User               @relation("PassengerRides", fields: [passengerId], references: [id])
+  driverId               String?
+  driver                 Driver?            @relation(fields: [driverId], references: [id])
+  serviceType            ServiceType        @default(RIDE)
+  corporateEmployeeId    String?
+  corporateEmployee      CorporateEmployee? @relation(fields: [corporateEmployeeId], references: [id])
+  ridePassId             String?
+  ridePass               RidePass?          @relation(fields: [ridePassId], references: [id])
+  status                 RideStatus         @default(REQUESTED)
   pickupAddress          String
-  pickupLatitude         Decimal    @db.Decimal(9, 6)
-  pickupLongitude        Decimal    @db.Decimal(9, 6)
+  pickupLatitude         Decimal            @db.Decimal(9, 6)
+  pickupLongitude        Decimal            @db.Decimal(9, 6)
   destinationAddress     String
-  destinationLatitude    Decimal    @db.Decimal(9, 6)
-  destinationLongitude   Decimal    @db.Decimal(9, 6)
+  destinationLatitude    Decimal            @db.Decimal(9, 6)
+  destinationLongitude   Decimal            @db.Decimal(9, 6)
   estimatedDistanceM     Int
   estimatedDurationSec   Int
   fareMinor              Int
   driverEarningsMinor    Int
   companyCommissionMinor Int
-  currency               String     @default("LRD")
-  paymentMethod           PaymentMethod @default(CASH)
-  promoCodeId             String?
-  promoCode               PromoCode? @relation(fields: [promoCodeId], references: [id])
-  discountMinor           Int        @default(0)
+  currency               String             @default("LRD")
+  paymentMethod          PaymentMethod      @default(CASH)
+  promoCodeId            String?
+  promoCode              PromoCode?         @relation(fields: [promoCodeId], references: [id])
+  discountMinor          Int                @default(0)
+  baseFareMinor          Int                @default(0)
+  dynamicMultiplierBps   Int                @default(10000)
+  waitingTimeSec         Int                @default(0)
+  waitingFeeMinor        Int                @default(0)
+  tollMinor              Int                @default(0)
   idempotencyKey         String
-  requestedAt            DateTime   @default(now())
+  requestedAt            DateTime           @default(now())
+  scheduledFor           DateTime?
   startedAt              DateTime?
+  acceptedAt             DateTime?
+  arrivedAt              DateTime?
+  boardedAt              DateTime?
   completedAt            DateTime?
+  cancelledAt            DateTime?
+  cancellationReason     String?
+  airportPickup          AirportPickup?
   payment                Payment?
   events                 RideEvent[]
   ratings                Rating[]
+  routePoints            RoutePoint[]
+  safetyIncidents        SafetyIncident[]
+  tripShares             TripShare[]
+  refunds                Refund[]
+  chatMessages           ChatMessage[]
+  offers                 RideOffer[]
+
   @@unique([passengerId, idempotencyKey])
   @@index([status, requestedAt])
   @@index([driverId, status])
+  @@index([passengerId, requestedAt(sort: Desc)])
+  @@index([driverId, completedAt(sort: Desc)])
+  @@index([status, scheduledFor])
+  @@index([corporateEmployeeId, requestedAt(sort: Desc)])
+}
+
+model RideOffer {
+  id          String          @id @default(uuid())
+  rideId      String
+  ride        Ride            @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  driverId    String
+  driver      Driver          @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  status      RideOfferStatus @default(OFFERED)
+  offeredAt   DateTime        @default(now())
+  respondedAt DateTime?
+
+  @@unique([rideId, driverId])
+  @@index([driverId, status, offeredAt(sort: Desc)])
 }
 
 model RideEvent {
@@ -239,23 +375,278 @@ model RideEvent {
   actorId   String?
   metadata  Json?
   createdAt DateTime @default(now())
+
   @@index([rideId, createdAt])
 }
 
+model CorporateAccount {
+  id                 String              @id @default(uuid())
+  name               String
+  billingEmail       String
+  managerId          String              @unique
+  manager            User                @relation("BusinessManager", fields: [managerId], references: [id])
+  monthlyBudgetMinor Int
+  active             Boolean             @default(true)
+  employees          CorporateEmployee[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+}
+
+model CorporateEmployee {
+  id                String           @id @default(uuid())
+  accountId         String
+  account           CorporateAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  userId            String           @unique
+  user              User             @relation(fields: [userId], references: [id])
+  monthlyLimitMinor Int
+  active            Boolean          @default(true)
+  rides             Ride[]
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@index([accountId, active])
+}
+
+model AirportPickup {
+  id           String   @id @default(uuid())
+  rideId       String   @unique
+  ride         Ride     @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  airportCode  String
+  flightNumber String
+  terminal     String?
+  arrivalAt    DateTime
+  meetAndGreet Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@index([airportCode, arrivalAt])
+}
+
+model ChatMessage {
+  id        String    @id @default(uuid())
+  rideId    String
+  ride      Ride      @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  senderId  String
+  sender    User      @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  content   String
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([rideId, createdAt])
+  @@index([senderId, createdAt])
+}
+
+model Referral {
+  id             String    @id @default(uuid())
+  referrerId     String
+  referrer       User      @relation("ReferralOwner", fields: [referrerId], references: [id])
+  referredUserId String    @unique
+  referredUser   User      @relation("ReferredUser", fields: [referredUserId], references: [id])
+  status         String    @default("PENDING")
+  rewardMinor    Int       @default(0)
+  qualifiedAt    DateTime?
+  rewardedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([referrerId, status])
+}
+
+model RoutePoint {
+  id         String   @id @default(uuid())
+  rideId     String
+  ride       Ride     @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  latitude   Decimal  @db.Decimal(9, 6)
+  longitude  Decimal  @db.Decimal(9, 6)
+  heading    Int?
+  speedMps   Decimal? @db.Decimal(7, 2)
+  recordedAt DateTime @default(now())
+
+  @@index([rideId, recordedAt])
+}
+
 model Payment {
-  id             String        @id @default(uuid())
-  rideId         String        @unique
-  ride           Ride          @relation(fields: [rideId], references: [id])
-  provider       String
-  providerRef    String?       @unique
-  idempotencyKey String        @unique
-  amountMinor    Int
-  currency       String        @default("LRD")
-  method         PaymentMethod
-  status         PaymentStatus @default(PENDING)
+  id              String        @id @default(uuid())
+  rideId          String        @unique
+  ride            Ride          @relation(fields: [rideId], references: [id])
+  provider        String
+  providerRef     String?       @unique
+  idempotencyKey  String        @unique
+  amountMinor     Int
+  currency        String        @default("LRD")
+  method          PaymentMethod
+  status          PaymentStatus @default(PENDING)
   providerPayload Json?
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  capturedAt      DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  refunds            Refund[]
+  manualConfirmation ManualPaymentConfirmation?
+
+  @@index([status, createdAt(sort: Desc)])
+}
+
+model ManualPaymentConfirmation {
+  id                String   @id @default(uuid())
+  paymentId         String   @unique
+  payment           Payment  @relation(fields: [paymentId], references: [id])
+  idempotencyKey    String   @unique
+  providerReference String
+  evidenceReference String
+  confirmedById     String
+  createdAt         DateTime @default(now())
+}
+
+model Refund {
+  id             String       @id @default(uuid())
+  rideId         String
+  ride           Ride         @relation(fields: [rideId], references: [id])
+  paymentId      String?
+  payment        Payment?     @relation(fields: [paymentId], references: [id])
+  amountMinor    Int
+  reason         String
+  status         RefundStatus @default(REQUESTED)
+  requestedById  String
+  reviewedById   String?
+  providerRef    String?
+  idempotencyKey String       @unique
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([status, createdAt])
+  @@index([rideId, createdAt])
+}
+
+model DriverPayout {
+  id             String       @id @default(uuid())
+  driverId       String
+  driver         Driver       @relation(fields: [driverId], references: [id])
+  amountMinor    Int
+  currency       String       @default("LRD")
+  status         PayoutStatus @default(PENDING)
+  periodStart    DateTime
+  periodEnd      DateTime
+  idempotencyKey String       @unique
+  providerRef    String?
+  processedAt    DateTime?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([driverId, createdAt])
+  @@index([status, createdAt])
+}
+
+model IncentiveProgram {
+  id           String            @id @default(uuid())
+  name         String
+  minimumRides Int
+  bonusMinor   Int
+  startsAt     DateTime
+  endsAt       DateTime
+  active       Boolean           @default(true)
+  fleetId      String?
+  fleet        Fleet?            @relation(fields: [fleetId], references: [id])
+  awards       DriverIncentive[]
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([active, startsAt, endsAt])
+}
+
+model DriverIncentive {
+  id          String           @id @default(uuid())
+  programId   String
+  program     IncentiveProgram @relation(fields: [programId], references: [id])
+  driverId    String
+  driver      Driver           @relation(fields: [driverId], references: [id])
+  rideCount   Int
+  amountMinor Int
+  awardedAt   DateTime         @default(now())
+
+  @@unique([programId, driverId])
+  @@index([driverId, awardedAt])
+}
+
+model CommissionPolicy {
+  id                   String   @id @default(uuid())
+  driverShareBps       Int
+  companyCommissionBps Int
+  effectiveAt          DateTime
+  createdById          String
+  reason               String
+  createdAt            DateTime @default(now())
+
+  @@index([effectiveAt(sort: Desc)])
+}
+
+model GeofenceZone {
+  id              String   @id @default(uuid())
+  name            String
+  centerLatitude  Decimal  @db.Decimal(9, 6)
+  centerLongitude Decimal  @db.Decimal(9, 6)
+  radiusM         Int
+  multiplierBps   Int      @default(10000)
+  airportCode     String?
+  active          Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([active])
+}
+
+model Delivery {
+  id                     String         @id @default(uuid())
+  customerId             String
+  customer               User           @relation("DeliveryCustomer", fields: [customerId], references: [id])
+  driverId               String?
+  driver                 Driver?        @relation(fields: [driverId], references: [id])
+  status                 DeliveryStatus @default(REQUESTED)
+  pickupAddress          String
+  pickupLatitude         Decimal        @db.Decimal(9, 6)
+  pickupLongitude        Decimal        @db.Decimal(9, 6)
+  dropoffAddress         String
+  dropoffLatitude        Decimal        @db.Decimal(9, 6)
+  dropoffLongitude       Decimal        @db.Decimal(9, 6)
+  recipientName          String
+  recipientPhone         String
+  packageDescription     String
+  proofOfDeliveryRef     String?
+  fareMinor              Int
+  driverEarningsMinor    Int
+  companyCommissionMinor Int
+  idempotencyKey         String
+  requestedAt            DateTime       @default(now())
+  completedAt            DateTime?
+
+  @@unique([customerId, idempotencyKey])
+  @@index([status, requestedAt])
+  @@index([driverId, status])
+}
+
+model RidePassProduct {
+  id            String     @id @default(uuid())
+  name          String
+  priceMinor    Int
+  rideCredits   Int
+  validityDays  Int
+  active        Boolean    @default(true)
+  subscriptions RidePass[]
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+}
+
+model RidePass {
+  id             String          @id @default(uuid())
+  productId      String
+  product        RidePassProduct @relation(fields: [productId], references: [id])
+  userId         String
+  user           User            @relation(fields: [userId], references: [id])
+  ridesRemaining Int
+  startsAt       DateTime
+  expiresAt      DateTime
+  status         String          @default("ACTIVE")
+  rides          Ride[]
+  createdAt      DateTime        @default(now())
+
+  @@index([userId, status, expiresAt])
 }
 
 model Wallet {
@@ -281,68 +672,159 @@ model WalletTransaction {
   description    String
   metadata       Json?
   createdAt      DateTime              @default(now())
+
   @@index([walletId, createdAt])
 }
 
 model Rating {
-  id        String   @id @default(uuid())
-  rideId    String
-  ride      Ride     @relation(fields: [rideId], references: [id])
-  authorId  String
-  author    User     @relation("RatingAuthor", fields: [authorId], references: [id])
-  subjectId String
-  subject   User     @relation("RatingSubject", fields: [subjectId], references: [id])
-  score     Int
-  comment   String?
-  createdAt DateTime @default(now())
+  id            String       @id @default(uuid())
+  rideId        String
+  ride          Ride         @relation(fields: [rideId], references: [id])
+  authorId      String
+  author        User         @relation("RatingAuthor", fields: [authorId], references: [id])
+  subjectId     String
+  subject       User         @relation("RatingSubject", fields: [subjectId], references: [id])
+  score         Int
+  comment       String?
+  status        ReviewStatus @default(PUBLISHED)
+  moderatedAt   DateTime?
+  moderatedById String?
+  createdAt     DateTime     @default(now())
+
   @@unique([rideId, authorId])
   @@index([subjectId, createdAt])
+  @@index([status, createdAt])
 }
 
-model PromoCode {
-  id              String   @id @default(uuid())
-  code            String   @unique
-  description     String
-  percentageOff   Int?
-  amountOffMinor  Int?
-  maxDiscountMinor Int?
-  minimumFareMinor Int     @default(0)
-  startsAt        DateTime
-  expiresAt       DateTime
-  maxUses         Int?
-  uses            Int      @default(0)
-  active          Boolean  @default(true)
-  rides           Ride[]
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-}
-
-model Notification {
+model FavouritePlace {
   id        String             @id @default(uuid())
   userId    String
   user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      FavouritePlaceType
+  label     String
+  address   String
+  latitude  Decimal            @db.Decimal(9, 6)
+  longitude Decimal            @db.Decimal(9, 6)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  @@unique([userId, label])
+  @@index([userId, type])
+}
+
+model DriverAvailability {
+  id        String   @id @default(uuid())
+  driverId  String
+  driver    Driver   @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  startsAt  DateTime
+  endsAt    DateTime
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  @@index([driverId, startsAt])
+}
+
+model EmergencyContact {
+  id           String   @id @default(uuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name         String
+  phone        String
+  relationship String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model TripShare {
+  id        String    @id @default(uuid())
+  rideId    String
+  ride      Ride      @relation(fields: [rideId], references: [id], onDelete: Cascade)
+  ownerId   String
+  owner     User      @relation("TripShareOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([rideId, expiresAt])
+}
+
+model SafetyIncident {
+  id             String               @id @default(uuid())
+  rideId         String
+  ride           Ride                 @relation(fields: [rideId], references: [id])
+  reporterId     String
+  status         SafetyIncidentStatus @default(OPEN)
+  category       String
+  note           String?
+  latitude       Decimal?             @db.Decimal(9, 6)
+  longitude      Decimal?             @db.Decimal(9, 6)
+  acknowledgedBy String?
+  acknowledgedAt DateTime?
+  resolvedBy     String?
+  resolvedAt     DateTime?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@index([status, createdAt])
+  @@index([rideId, createdAt])
+}
+
+model PromoCode {
+  id               String          @id @default(uuid())
+  code             String          @unique
+  description      String
+  percentageOff    Int?
+  amountOffMinor   Int?
+  maxDiscountMinor Int?
+  minimumFareMinor Int             @default(0)
+  startsAt         DateTime
+  expiresAt        DateTime
+  maxUses          Int?
+  uses             Int             @default(0)
+  active           Boolean         @default(true)
+  rides            Ride[]
+  campaignId       String?
+  campaign         CouponCampaign? @relation(fields: [campaignId], references: [id])
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([active, expiresAt])
+}
+
+model Notification {
+  id        String              @id @default(uuid())
+  userId    String
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   channel   NotificationChannel
-  status    NotificationStatus @default(PENDING)
+  status    NotificationStatus  @default(PENDING)
   template  String
   title     String
   body      String
   data      Json?
   sentAt    DateTime?
   readAt    DateTime?
-  createdAt DateTime           @default(now())
+  attemptCount Int               @default(0)
+  nextAttemptAt DateTime?
+  createdAt DateTime            @default(now())
+
   @@index([userId, status, createdAt])
+  @@index([status, nextAttemptAt])
 }
 
 model Device {
-  id        String   @id @default(uuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  platform  String
-  pushToken String   @unique
-  active    Boolean  @default(true)
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform   String
+  pushToken  String   @unique
+  active     Boolean  @default(true)
   lastSeenAt DateTime @default(now())
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
   @@index([userId, active])
 }
 
@@ -360,21 +842,62 @@ model KycCase {
   documents      KycDocument[]
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
+
   @@index([status, submittedAt])
 }
 
 model KycDocument {
-  id          String          @id @default(uuid())
-  kycCaseId   String
-  kycCase     KycCase         @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
-  type        KycDocumentType
-  storageKey  String
-  mimeType    String
-  checksum    String
-  expiresAt   DateTime?
-  verifiedAt  DateTime?
-  createdAt   DateTime        @default(now())
+  id                   String          @id @default(uuid())
+  kycCaseId            String
+  kycCase              KycCase         @relation(fields: [kycCaseId], references: [id], onDelete: Cascade)
+  type                 KycDocumentType
+  storageKey           String
+  mimeType             String
+  checksum             String
+  sizeBytes            Int
+  scanStatus           String          @default("QUARANTINED")
+  scannedAt            DateTime?
+  expiresAt            DateTime?
+  verifiedAt           DateTime?
+  expiryReminderSentAt DateTime?
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
   @@unique([kycCaseId, type])
+  @@index([expiryReminderSentAt, expiresAt])
+  @@index([scanStatus, createdAt])
+}
+
+model CouponCampaign {
+  id          String      @id @default(uuid())
+  name        String
+  budgetMinor Int
+  spentMinor  Int         @default(0)
+  startsAt    DateTime
+  endsAt      DateTime
+  active      Boolean     @default(true)
+  promoCodes  PromoCode[]
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([active, startsAt, endsAt])
+}
+
+model FraudSignal {
+  id           String    @id @default(uuid())
+  userId       String?
+  entityType   String
+  entityId     String?
+  rule         String
+  score        Int
+  action       String
+  metadata     Json?
+  reviewedAt   DateTime?
+  reviewedById String?
+  createdAt    DateTime  @default(now())
+
+  @@index([userId, createdAt])
+  @@index([action, createdAt])
 }
 
 model AuditLog {
@@ -386,6 +909,8 @@ model AuditLog {
   ipAddress  String?
   metadata   Json?
   createdAt  DateTime @default(now())
+
   @@index([entityType, entityId])
   @@index([actorId, createdAt])
+  @@index([createdAt(sort: Desc)])
 }

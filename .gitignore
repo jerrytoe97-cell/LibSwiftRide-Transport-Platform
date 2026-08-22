@@ -80,6 +80,9 @@ Thumbs.db
 test-results/
 playwright-report/
 apps/api/prisma/dev.db
+.codex-corepack/
+.codex-runtime/
+.preview-runtime/
 
 # parcel-bundler cache (https://parceljs.org/)
 .cache
@@ -138,6 +141,7 @@ dist
 
 # pnpm
 .pnpm-store
+.turbo/
 
 # yarn v3
 .pnp.*

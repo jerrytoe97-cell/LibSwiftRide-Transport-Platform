@@ -17,7 +17,7 @@ This runbook covers safety, security, privacy, availability and financial incide
 3. Contain the incident. Disable affected integrations, revoke credentials or sessions, isolate workloads, and preserve immutable audit and provider evidence.
 4. Assess scope using request IDs, audit events, deployment versions, payment references and aggregate GPS freshness. Restrict sensitive queries to approved personnel.
 5. Recover from a known artifact. Restore PostgreSQL only under the backup runbook and two-person approval. Redis presence data must be rebuilt, not treated as current after restore.
-6. Validate authentication, authorization, booking, matching, trip state, 88/12 allocation, payments and notifications before reopening traffic.
+6. Validate authentication, authorization, booking, matching, trip state, 86/14 allocation, first-ride referral rewards, payments and notifications before reopening traffic.
 7. Communicate on a fixed cadence. Legal and privacy owners approve regulator, provider and customer notifications.
 
 ## Financial and provider incidents

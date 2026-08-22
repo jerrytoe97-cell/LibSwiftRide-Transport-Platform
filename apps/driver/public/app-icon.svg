@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="LibSwiftRide Driver">
+  <rect width="512" height="512" rx="112" fill="#0c2454"/>
+  <path d="M104 331V181h65v94h157v56H104Z" fill="#fff"/>
+  <path d="M210 181h126c42 0 72 24 72 62 0 26-14 45-39 55l48 72h-76l-38-62h-28v62h-65V181Zm65 54v24h55c9 0 14-4 14-12s-5-12-14-12h-55Z" fill="#bc2c24"/>
+</svg>

@@ -1,4 +1,103 @@
-import React,{useEffect,useState}from"react";import{createRoot}from"react-dom/client";import{apiClient,money}from"@libswiftride/sdk";import{Map,Shell,Stat}from"@libswiftride/ui";import"@libswiftride/ui/styles.css";
-type Ride={id:string;status:string;pickupAddress:string;destinationAddress:string;fareMinor:number;requestedAt:string;passenger:{firstName:string;lastName:string};driver?:{user:{firstName:string;lastName:string};vehicle?:{plateNumber:string}}};
-function App(){const[rides,setRides]=useState<Ride[]>([]);const[error,setError]=useState("");useEffect(()=>{let active=true;const load=()=>apiClient.request<{data:Ride[]}>("/dispatch/rides").then(r=>active&&setRides(r.data)).catch(e=>active&&setError(e.message));load();const timer=setInterval(load,10000);return()=>{active=false;clearInterval(timer)}},[]);
-const searching=rides.filter(r=>r.status==="SEARCHING").length;return <Shell product="Dispatcher"><span className="eyebrow">Live dispatch</span><h1>Move every ride forward.</h1>{error&&<p className="notice error">{error}</p>}<div className="grid"><Stat label="Open rides" value={String(rides.length)}/><Stat label="Awaiting driver" value={String(searching)}/><Stat label="Refresh" value="10 sec"/></div><section className="hero"><div className="panel"><h2>Dispatch queue</h2><table><thead><tr><th>Passenger</th><th>Route</th><th>Status</th><th>Fare</th></tr></thead><tbody>{rides.map(r=><tr key={r.id}><td>{r.passenger.firstName} {r.passenger.lastName}</td><td>{r.pickupAddress} → {r.destinationAddress}</td><td>{r.status.replaceAll("_"," ")}</td><td>{money(r.fareMinor)}</td></tr>)}</tbody></table></div><Map label="Dispatcher service map"/></section></Shell>}createRoot(document.getElementById("root")!).render(<React.StrictMode><App/></React.StrictMode>);
+import React, { useEffect, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { apiClient, money } from "@libswiftride/sdk";
+import { Map, Shell, Stat } from "@libswiftride/ui";
+import "@libswiftride/ui/styles.css";
+
+type Ride = { id: string; status: string; pickupAddress: string; destinationAddress: string; fareMinor: number; requestedAt: string; passenger: { firstName: string; lastName: string }; driver?: { user: { firstName: string; lastName: string }; vehicle?: { plateNumber: string } } };
+type Driver = { id: string; user: { firstName: string; lastName: string }; vehicle: { make: string; model: string; plateNumber: string } | null; location: { latitude: number; longitude: number; at: string } | null };
+
+function App() {
+  const [rides, setRides] = useState<Ride[]>([]);
+  const [drivers, setDrivers] = useState<Driver[]>([]);
+  const [selectedDrivers, setSelectedDrivers] = useState<Record<string, string>>({});
+  const [error, setError] = useState("");
+
+  async function load() {
+    const [queue, available] = await Promise.all([
+      apiClient.request<{ data: Ride[] }>("/dispatch/rides"),
+      apiClient.request<{ data: Driver[] }>("/dispatch/drivers")
+    ]);
+    setRides(queue.data);
+    setDrivers(available.data);
+    setError("");
+  }
+
+  useEffect(() => {
+    if (!apiClient.hasSession()) return;
+    let active = true;
+    const refresh = () => load().catch((requestError: Error) => active && setError(requestError.message));
+    refresh();
+    const timer = setInterval(refresh, 10_000);
+    return () => { active = false; clearInterval(timer); };
+  }, []);
+
+  async function assign(rideId: string) {
+    const driverId = selectedDrivers[rideId];
+    if (!driverId) return setError("Select an available driver first.");
+    try {
+      await apiClient.request(`/dispatch/rides/${rideId}/assign`, { method: "POST", body: JSON.stringify({ driverId }) });
+      await load();
+    } catch (requestError) {
+      setError((requestError as Error).message);
+    }
+  }
+
+  async function setDriverStatus(driverId: string, status: "OFFLINE" | "SUSPENDED") {
+    try {
+      await apiClient.request(`/dispatch/drivers/${driverId}/status`, { method: "PATCH", body: JSON.stringify({ status }) });
+      await load();
+    } catch (requestError) { setError((requestError as Error).message); }
+  }
+
+  const searching = rides.filter((ride) => ride.status === "SEARCHING").length;
+  return (
+    <Shell product="Dispatcher" demoRole="DISPATCHER">
+      <span className="eyebrow">Live dispatch</span><h1>Move every ride forward.</h1>
+      {error && <p className="notice error">{error}</p>}
+      <div className="grid">
+        <Stat label="Open rides" value={String(rides.length)} />
+        <Stat label="Awaiting driver" value={String(searching)} />
+        <Stat label="Available drivers" value={String(drivers.length)} />
+      </div>
+      <section className="hero">
+        <div className="panel">
+          <h2>Dispatch queue</h2>
+          <table><thead><tr><th>Passenger</th><th>Route</th><th>Status</th><th>Fare</th><th>Assignment</th></tr></thead>
+            <tbody>{rides.map((ride) => <tr key={ride.id}>
+              <td>{ride.passenger.firstName} {ride.passenger.lastName}</td>
+              <td>{ride.pickupAddress} → {ride.destinationAddress}</td>
+              <td>{ride.status.replaceAll("_", " ")}</td>
+              <td>{money(ride.fareMinor)}</td>
+              <td>{ride.status === "SEARCHING" ? <div className="toolbar">
+                <select aria-label="Available driver" value={selectedDrivers[ride.id] ?? ""} onChange={(event) => setSelectedDrivers((current) => ({ ...current, [ride.id]: event.target.value }))}>
+                  <option value="">Select driver</option>
+                  {drivers.map((driver) => <option key={driver.id} value={driver.id}>{driver.user.firstName} {driver.user.lastName} · {driver.vehicle?.plateNumber ?? "No plate"}</option>)}
+                </select>
+                <button className="action" onClick={() => assign(ride.id)}>Assign</button>
+              </div> : ride.driver ? `${ride.driver.user.firstName} ${ride.driver.user.lastName}` : "Matching"}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+        <div className="panel">
+          <Map {...(drivers.find((driver) => driver.location)?.location ?? {})} label="Live available driver map" />
+          <h2>Driver status</h2>
+          {drivers.map((driver) => <div className="toolbar" key={driver.id}><span>{driver.user.firstName} {driver.user.lastName} · {driver.location ? "GPS live" : "GPS stale"}</span><span><button className="link-button" onClick={() => setDriverStatus(driver.id, "OFFLINE")}>Set offline</button> · <button className="link-button" onClick={() => setDriverStatus(driver.id, "SUSPENDED")}>Suspend</button></span></div>)}
+        </div>
+      </section>
+      <section className="split">
+        <article className="panel"><span className="eyebrow">Ride timeline</span><h2>Selected trip progress</h2>
+          {["Booked · 10:42","Driver assigned · 10:43","Driver arriving · ETA 4 min","Pickup confirmation pending"].map((event,index)=><div className="mini-row" key={event}><span>{event}</span><strong>{index<3 ? "✓" : "Now"}</strong></div>)}
+        </article>
+        <article className="panel"><span className="eyebrow">Operations inbox</span><h2>Live notifications</h2>
+          <div className="mini-row"><span>2 rides approaching SLA</span><strong>Review</strong></div>
+          <div className="mini-row"><span>Driver document expires soon</span><strong>Notify</strong></div>
+          <div className="mini-row"><span>Open safety check</span><strong>Escalate</strong></div>
+        </article>
+      </section>
+      <section className="panel"><div className="toolbar"><div><span className="eyebrow">Incident response</span><h2>Contact and escalation actions</h2></div><div className="page-actions"><button className="action secondary">Contact driver</button><button className="action secondary">Contact passenger</button><button className="action danger">Escalate incident</button></div></div></section>
+    </Shell>
+  );
+}
+
+createRoot(document.getElementById("root")!).render(<React.StrictMode><App /></React.StrictMode>);
