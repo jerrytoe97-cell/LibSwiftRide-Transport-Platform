@@ -87,7 +87,7 @@ pnpm compose:up      # full container stack
 
 Copy `.env.example` to `.env`. At minimum, replace JWT secrets. External payment methods remain disabled unless `PAYMENTS_ENABLED=true`; only enable them after official credentials and staging certification. CORS origins, database URLs, metrics access and payment webhook secrets are environment-specific.
 
-Interactive maps use MapLibre. Without a Mapbox token, the clients use the OpenStreetMap-derived demo style; setting `VITE_MAPBOX_ACCESS_TOKEN` switches to Mapbox while preserving the same marker, route, and future live-driver interfaces. Only use browser-safe public (`pk...`) Mapbox tokens with read-only map scopes and origin restrictions.
+Production maps use Google Maps Platform with `VITE_MAP_PROVIDER=google` and a website-restricted `VITE_GOOGLE_MAPS_BROWSER_API_KEY`. The API uses a separate server-only `GOOGLE_MAPS_SERVER_API_KEY` for authoritative Routes API distance, duration and route geometry. Without the browser key, clients retain the OpenStreetMap-derived preview for non-production use.
 
 Passenger road routes are calculated by the API through the routing adapter (`ROUTING_API_URL`, defaulting to the public OSRM demo endpoint, and `ROUTING_TIMEOUT_MS`). The API returns route geometry, road distance, and duration, then authoritatively calculates the fare from those server-obtained metrics. Ride creation recalculates the route and price instead of trusting values supplied by the browser. Configure an approved or self-hosted routing service with an operational SLA before production; the public demo service is for development only.
 

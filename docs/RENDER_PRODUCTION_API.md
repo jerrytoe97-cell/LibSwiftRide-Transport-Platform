@@ -33,9 +33,13 @@ connection strings; never copy them into source control.
 
 Enter these `sync: false` variables without committing their values:
 
-- `CORS_ORIGINS`: comma-separated exact production origins, without paths or
-  trailing slashes.
-- `MAPBOX_ROUTING_TOKEN`: production token with Directions access.
+- `CORS_ORIGINS` is committed as the seven exact Render HTTPS origins: `web`,
+  `passenger`, `driver`, `fleet`, `admin`, `dispatcher`, and `business` under
+  `libswiftride-<name>.onrender.com`. It is not a secret and needs no manual value.
+- `GOOGLE_MAPS_SERVER_API_KEY`: server-restricted key with Routes API access.
+- `VITE_GOOGLE_MAPS_BROWSER_API_KEY`: configure separately on every static
+  frontend, restricted to the seven production HTTPS origins and to Maps
+  JavaScript API and Places API (New).
 - `ZOHO_SMTP_APP_PASSWORD`: app password for `support@libswiftride.com`.
 - `RESEND_API_KEY`: retain the existing key for rollback; Zoho remains selected.
 - `ORANGE_MONEY_NUMBER` and `MTN_MOMO_NUMBER`: required only when enabling live

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type ReactNode } from "react";
 import { apiClient, registerWebPushDevice } from "@libswiftride/sdk";
-import "mapbox-gl/dist/mapbox-gl.css";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { ThemeMode } from "./theme/index.js";
 import "./styles.css";
@@ -24,8 +23,20 @@ const demoEnabled = environment?.VITE_DEMO_MODE === "true";
 const pushConfigured = Boolean(environment?.VITE_WEB_PUSH_PUBLIC_KEY?.trim());
 const apiUrl = environment?.VITE_API_URL ?? "http://localhost:4000/api/v1";
 const requestedMapProvider = environment?.VITE_MAP_PROVIDER?.trim().toLowerCase() || "preview";
-const configuredMapboxToken = environment?.VITE_MAPBOX_ACCESS_TOKEN?.trim();
-const mapboxAccessToken = requestedMapProvider === "mapbox" && configuredMapboxToken?.startsWith("pk.") ? configuredMapboxToken : undefined;
+const googleMapsBrowserKey = requestedMapProvider === "google" ? environment?.VITE_GOOGLE_MAPS_BROWSER_API_KEY?.trim() : undefined;
+let googleMapsPromise: Promise<any> | undefined;
+export function loadGoogleMaps() {
+  if (!googleMapsBrowserKey) return Promise.reject(new Error("Google Maps is not configured"));
+  if (googleMapsPromise) return googleMapsPromise;
+  googleMapsPromise = new Promise((resolve, reject) => {
+    const callback = `libSwiftRideGoogleMaps${Date.now()}`;
+    (window as any)[callback] = () => { delete (window as any)[callback]; resolve((window as any).google.maps); };
+    const script = document.createElement("script");
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(googleMapsBrowserKey)}&libraries=places&v=weekly&callback=${callback}`;
+    script.async = true; script.onerror = () => reject(new Error("Google Maps failed to load")); document.head.appendChild(script);
+  });
+  return googleMapsPromise;
+}
 const brandLogoUrl = new URL("./assets/libswiftride-logo.png", import.meta.url).href;
 
 function initialNetworkOnline() {
@@ -503,11 +514,10 @@ export function Map({ latitude = 6.3156, longitude = -10.8074, label = "Monrovia
     if (!container.current || map.current) return;
     let disposed = false;
     const initialize = async () => {
-      if (mapboxAccessToken) {
-        const { default: mapboxgl } = await import("mapbox-gl");
+      if (googleMapsBrowserKey) {
+        const googleMaps = await loadGoogleMaps();
         if (disposed || !container.current) return;
-        const instance = new mapboxgl.Map({ accessToken: mapboxAccessToken, container: container.current, style: "mapbox://styles/mapbox/streets-v12", center: [longitude, latitude], zoom: 13 });
-        instance.addControl(new mapboxgl.NavigationControl({ showCompass: true }), "top-right");
+        const instance = new googleMaps.Map(container.current, { center: { lat: latitude, lng: longitude }, zoom: 13, mapTypeControl: false, streetViewControl: false });
         map.current = instance as unknown as MapController;
       } else {
         const maplibreModule = await import("maplibre-gl");
@@ -524,7 +534,9 @@ export function Map({ latitude = 6.3156, longitude = -10.8074, label = "Monrovia
       disposed = true;
       markers.current.forEach((current) => current.remove());
       markers.current = [];
-      map.current?.remove();
+      if (googleMapsBrowserKey) {
+        if (container.current) container.current.replaceChildren();
+      } else map.current?.remove();
       map.current = null;
     };
   }, []);
@@ -542,13 +554,22 @@ export function Map({ latitude = 6.3156, longitude = -10.8074, label = "Monrovia
     const render = async () => {
       if (cancelled) return;
       markers.current.forEach((current) => current.remove());
-      if (mapboxAccessToken) {
-        const { default: mapboxgl } = await import("mapbox-gl");
+      if (googleMapsBrowserKey) {
+        const googleMaps = await loadGoogleMaps();
+        const googleMap = currentMap as any;
         markers.current = points.map((point) => {
-          const marker = new mapboxgl.Marker({ color: point.color }).setLngLat([point.longitude, point.latitude]);
-          if (point.label) marker.setPopup(new mapboxgl.Popup({ offset: 18 }).setText(point.label));
-          return marker.addTo(currentMap as unknown as import("mapbox-gl").Map);
+          const marker = new googleMaps.Marker({ map: googleMap, position: { lat: point.latitude, lng: point.longitude }, title: point.label, icon: { path: googleMaps.SymbolPath.CIRCLE, fillColor: point.color, fillOpacity: 1, strokeColor: "#ffffff", strokeWeight: 2, scale: 8 } });
+          return { remove: () => marker.setMap(null) };
         });
+        const previousRoute = (googleMap as any).__libSwiftRideRoute;
+        if (previousRoute) previousRoute.setMap(null);
+        if (pickup && destination && route.length >= 2) {
+          (googleMap as any).__libSwiftRideRoute = new googleMaps.Polyline({ map: googleMap, path: route.map(([lng, lat]) => ({ lat, lng })), strokeColor: "#0c2454", strokeOpacity: 0.82, strokeWeight: 5 });
+        }
+        if (points.length > 1) {
+          const bounds = new googleMaps.LatLngBounds(); points.forEach((point) => bounds.extend({ lat: point.latitude, lng: point.longitude })); googleMap.fitBounds(bounds, 70);
+        } else googleMap.panTo({ lat: latitude, lng: longitude });
+        return;
       } else {
         const maplibreModule = await import("maplibre-gl");
         const maplibregl = "Map" in maplibreModule ? maplibreModule : (maplibreModule as unknown as { default: typeof maplibreModule }).default;
@@ -591,6 +612,6 @@ export function Map({ latitude = 6.3156, longitude = -10.8074, label = "Monrovia
 
   return <div className="map-frame" aria-label={label}>
     <div className="mapbox-map" ref={container} />
-    <div className="map-overlay"><span className="live-dot" /> {label}<small>{mapboxAccessToken ? "Mapbox" : "OpenStreetMap preview"}</small></div>
+    <div className="map-overlay"><span className="live-dot" /> {label}<small>{googleMapsBrowserKey ? "Google Maps" : "OpenStreetMap preview"}</small></div>
   </div>;
 }

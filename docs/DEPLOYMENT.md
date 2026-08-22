@@ -15,7 +15,7 @@ Create a staging Blueprint first. Render generates database, Redis and JWT value
 - `ROUTING_API_URL` with an approved HTTPS routing service; production rejects the public OSRM demo endpoint
 - `VITE_API_URL` as `https://<api-host>/api/v1`
 - `VITE_WS_URL` as `wss://<api-host>/ws`
-- `VITE_MAP_PROVIDER=mapbox` only after Mapbox billing approval, with a restricted environment-specific public token in `VITE_MAPBOX_ACCESS_TOKEN`
+- `VITE_MAP_PROVIDER=google` with a browser-restricted key in `VITE_GOOGLE_MAPS_BROWSER_API_KEY`; never reuse the server key in a frontend
 - All `VITE_*_APP_URL` values as the exact HTTPS origins assigned to the seven hosted frontends
 - `PAYMENTS_ENABLED=false` until official provider credentials and certification evidence exist
 - Payment-provider credentials and signed-webhook secrets
@@ -24,7 +24,7 @@ Create a staging Blueprint first. Render generates database, Redis and JWT value
 
 Privileged staging identities are created only through the audited, create-only procedure in `docs/PRIVILEGED_ACCOUNT_PROVISIONING.md`. Do not use the local demo seed in hosted environments and do not keep provisioning passwords in Render environment values after the one-time command completes.
 
-Mapbox passenger search uses the Search Box suggest/retrieve session flow, restricted to Liberia and biased toward Greater Monrovia. Confirm the web token includes the required public search scope and that the approved Mapbox plan permits the platform's operational handling of selected ride coordinates before production use.
+Google Places autocomplete is restricted to Liberia and biased toward Greater Monrovia. Enable Maps JavaScript API and Places API (New) on the browser key, and Routes API on the separate server key. Apply billing alerts and the documented application/API restrictions before production use.
 
 The API pre-deploy command applies checked-in Prisma migrations. Render health checks use `/health/ready`.
 

@@ -53,7 +53,7 @@ type Receipt = {
 };
 
 type Location = { address: string; latitude: number; longitude: number };
-type PlaceSuggestion = { mapbox_id: string; name: string; place_formatted?: string; full_address?: string; coordinates?: [number, number] };
+type PlaceSuggestion = { placeId: string; name: string; placeFormatted?: string; coordinates?: [number, number] };
 type RideOption = "ECONOMY" | "PREMIUM" | "BUSINESS";
 type SosCategory = "MEDICAL" | "SECURITY" | "CRASH" | "HARASSMENT" | "OTHER";
 const defaultLocations = {
@@ -61,16 +61,16 @@ const defaultLocations = {
   destination: { address: "Samuel K. Doe Sports Complex, Paynesville", latitude: 6.25694, longitude: -10.70213 }
 };
 
-const mapboxSearchToken = (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_MAPBOX_ACCESS_TOKEN?.trim();
+const googleMapsBrowserKey = (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_GOOGLE_MAPS_BROWSER_API_KEY?.trim();
 const greaterMonroviaPlaces: PlaceSuggestion[] = [
-  { mapbox_id: "local:broad-street", name: "Broad Street", place_formatted: "Monrovia, Liberia", coordinates: [-10.8074, 6.3156] },
-  { mapbox_id: "local:skd", name: "Samuel K. Doe Sports Complex", place_formatted: "Paynesville, Liberia", coordinates: [-10.70213, 6.25694] },
-  { mapbox_id: "local:elwa", name: "ELWA Junction", place_formatted: "Paynesville, Liberia", coordinates: [-10.7031, 6.2647] },
-  { mapbox_id: "local:red-light", name: "Red Light Market", place_formatted: "Paynesville, Liberia", coordinates: [-10.7057, 6.2901] },
-  { mapbox_id: "local:tubman-boulevard", name: "Tubman Boulevard", place_formatted: "Sinkor, Monrovia, Liberia", coordinates: [-10.7739, 6.2871] },
-  { mapbox_id: "local:spriggs-payne", name: "Spriggs Payne Airport", place_formatted: "Sinkor, Monrovia, Liberia", coordinates: [-10.7587, 6.2891] },
-  { mapbox_id: "local:duala", name: "Duala Market", place_formatted: "Monrovia, Liberia", coordinates: [-10.795, 6.363] },
-  { mapbox_id: "local:mamba-point", name: "Mamba Point", place_formatted: "Monrovia, Liberia", coordinates: [-10.806, 6.3264] }
+  { placeId: "local:broad-street", name: "Broad Street", placeFormatted: "Monrovia, Liberia", coordinates: [-10.8074, 6.3156] },
+  { placeId: "local:skd", name: "Samuel K. Doe Sports Complex", placeFormatted: "Paynesville, Liberia", coordinates: [-10.70213, 6.25694] },
+  { placeId: "local:elwa", name: "ELWA Junction", placeFormatted: "Paynesville, Liberia", coordinates: [-10.7031, 6.2647] },
+  { placeId: "local:red-light", name: "Red Light Market", placeFormatted: "Paynesville, Liberia", coordinates: [-10.7057, 6.2901] },
+  { placeId: "local:tubman-boulevard", name: "Tubman Boulevard", placeFormatted: "Sinkor, Monrovia, Liberia", coordinates: [-10.7739, 6.2871] },
+  { placeId: "local:spriggs-payne", name: "Spriggs Payne Airport", placeFormatted: "Sinkor, Monrovia, Liberia", coordinates: [-10.7587, 6.2891] },
+  { placeId: "local:duala", name: "Duala Market", placeFormatted: "Monrovia, Liberia", coordinates: [-10.795, 6.363] },
+  { placeId: "local:mamba-point", name: "Mamba Point", placeFormatted: "Monrovia, Liberia", coordinates: [-10.806, 6.3264] }
 ];
 
 function PlaceSearchField({ label, value, onChange }: { label: string; value: Location; onChange: (location: Location) => void }) {
@@ -89,26 +89,20 @@ function PlaceSearchField({ label, value, onChange }: { label: string; value: Lo
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       const normalizedQuery = query.toLocaleLowerCase();
-      const localSuggestions = greaterMonroviaPlaces.filter((place) => `${place.name} ${place.place_formatted ?? ""}`.toLocaleLowerCase().includes(normalizedQuery));
+      const localSuggestions = greaterMonroviaPlaces.filter((place) => `${place.name} ${place.placeFormatted ?? ""}`.toLocaleLowerCase().includes(normalizedQuery));
       setSuggestions(localSuggestions);
-      if (!mapboxSearchToken) { setSearching(false); return; }
+      if (!googleMapsBrowserKey) { setSearching(false); return; }
       setSearching(true);
       setSearchError("");
       try {
-        const parameters = new URLSearchParams({
-          q: query,
-          access_token: mapboxSearchToken,
-          session_token: sessionToken.current,
-          country: "LR",
-          language: "en",
-          limit: "6",
-          proximity: "-10.78,6.30",
-          bbox: "-10.95,6.18,-10.55,6.55"
-        });
-        const response = await fetch(`https://api.mapbox.com/search/searchbox/v1/suggest?${parameters}`, { signal: controller.signal });
+        const response = await fetch("https://places.googleapis.com/v1/places:autocomplete", { method: "POST", signal: controller.signal, headers: { "content-type": "application/json", "x-goog-api-key": googleMapsBrowserKey }, body: JSON.stringify({ input: query, sessionToken: sessionToken.current, includedRegionCodes: ["lr"], languageCode: "en", locationBias: { circle: { center: { latitude: 6.3, longitude: -10.78 }, radius: 30000 } } }) });
         if (!response.ok) throw new Error("Search unavailable");
-        const result = await response.json() as { suggestions?: PlaceSuggestion[] };
-        const remoteSuggestions = result.suggestions ?? [];
+        const result = await response.json() as { suggestions?: Array<{ placePrediction?: { placeId?: string; text?: { text?: string }; structuredFormat?: { mainText?: { text?: string }; secondaryText?: { text?: string } } } }> };
+        const remoteSuggestions = (result.suggestions ?? []).flatMap(({ placePrediction }) => {
+          if (!placePrediction?.placeId) return [];
+          const secondary = placePrediction.structuredFormat?.secondaryText?.text;
+          return [{ placeId: placePrediction.placeId, name: placePrediction.structuredFormat?.mainText?.text ?? placePrediction.text?.text ?? "Location", ...(secondary ? { placeFormatted: secondary } : {}) }];
+        });
         setSuggestions([...localSuggestions, ...remoteSuggestions.filter((remote) => !localSuggestions.some((local) => local.name.toLocaleLowerCase() === remote.name.toLocaleLowerCase()))].slice(0, 6));
       } catch (error) {
         if ((error as Error).name !== "AbortError" && localSuggestions.length === 0) setSearchError("Location search is temporarily unavailable.");
@@ -121,25 +115,20 @@ function PlaceSearchField({ label, value, onChange }: { label: string; value: Lo
 
   async function selectSuggestion(suggestion: PlaceSuggestion) {
     if (suggestion.coordinates) {
-      onChange({ address: [suggestion.name, suggestion.place_formatted].filter(Boolean).join(", "), longitude: suggestion.coordinates[0], latitude: suggestion.coordinates[1] });
+      onChange({ address: [suggestion.name, suggestion.placeFormatted].filter(Boolean).join(", "), longitude: suggestion.coordinates[0], latitude: suggestion.coordinates[1] });
       setSuggestions([]);
       sessionToken.current = crypto.randomUUID();
       return;
     }
-    if (!mapboxSearchToken) return;
+    if (!googleMapsBrowserKey) return;
     setSearching(true);
     setSearchError("");
     try {
-      const parameters = new URLSearchParams({ access_token: mapboxSearchToken, session_token: sessionToken.current, language: "en" });
-      const response = await fetch(`https://api.mapbox.com/search/searchbox/v1/retrieve/${encodeURIComponent(suggestion.mapbox_id)}?${parameters}`);
+      const response = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(suggestion.placeId)}`, { headers: { "x-goog-api-key": googleMapsBrowserKey, "x-goog-fieldmask": "id,displayName,formattedAddress,location" } });
       if (!response.ok) throw new Error("Location details unavailable");
-      const result = await response.json() as { features?: Array<{ geometry?: { coordinates?: [number, number] }; properties?: { name?: string; full_address?: string; place_formatted?: string } }> };
-      const feature = result.features?.[0];
-      const coordinates = feature?.geometry?.coordinates;
-      if (!coordinates || !coordinates.every(Number.isFinite)) throw new Error("Location has no coordinates");
-      const properties = feature?.properties;
-      const address = properties?.full_address ?? [properties?.name ?? suggestion.name, properties?.place_formatted ?? suggestion.place_formatted].filter(Boolean).join(", ");
-      onChange({ address, longitude: coordinates[0], latitude: coordinates[1] });
+      const result = await response.json() as { formattedAddress?: string; displayName?: { text?: string }; location?: { latitude?: number; longitude?: number } };
+      if (!Number.isFinite(result.location?.latitude) || !Number.isFinite(result.location?.longitude)) throw new Error("Location has no coordinates");
+      onChange({ address: result.formattedAddress ?? result.displayName?.text ?? suggestion.name, longitude: result.location!.longitude!, latitude: result.location!.latitude! });
       setSuggestions([]);
       sessionToken.current = crypto.randomUUID();
     } catch {
@@ -154,11 +143,11 @@ function PlaceSearchField({ label, value, onChange }: { label: string; value: Lo
     {searching && <small role="status">Searching Greater Monrovia…</small>}
     {searchError && <small className="place-search-error" role="alert">{searchError}</small>}
     {suggestions.length > 0 && <div className="place-suggestions" role="listbox" aria-label={`${label} suggestions`}>
-      {suggestions.map((suggestion) => <button type="button" role="option" aria-selected="false" key={suggestion.mapbox_id} onClick={() => void selectSuggestion(suggestion)}>
-        <strong>{suggestion.name}</strong><small>{suggestion.place_formatted ?? suggestion.full_address ?? "Liberia"}</small>
+      {suggestions.map((suggestion) => <button type="button" role="option" aria-selected="false" key={suggestion.placeId} onClick={() => void selectSuggestion(suggestion)}>
+        <strong>{suggestion.name}</strong><small>{suggestion.placeFormatted ?? "Liberia"}</small>
       </button>)}
     </div>}
-    {!mapboxSearchToken && <small>Address search is not configured. Use a saved place or GPS pickup.</small>}
+    {!googleMapsBrowserKey && <small>Address search is not configured. Use a saved place or GPS pickup.</small>}
   </div>;
 }
 

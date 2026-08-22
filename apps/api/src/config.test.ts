@@ -22,17 +22,17 @@ describe("production environment safeguards", () => {
     expect(parseEnvironment(production)).toMatchObject({ NODE_ENV: "production", PAYMENTS_ENABLED: false });
   });
 
-  it("accepts Mapbox routing only with a server-side token", () => {
+  it("accepts Google routing only with a server-side key", () => {
     expect(parseEnvironment({
       ...production,
-      ROUTING_PROVIDER: "mapbox",
-      ROUTING_API_URL: "https://api.mapbox.com/directions/v5/mapbox/driving",
-      MAPBOX_ROUTING_TOKEN: "mapbox-routing-token-value"
-    })).toMatchObject({ ROUTING_PROVIDER: "mapbox" });
+      ROUTING_PROVIDER: "google",
+      ROUTING_API_URL: "https://routes.googleapis.com/directions/v2:computeRoutes",
+      GOOGLE_MAPS_SERVER_API_KEY: "google-server-key-value"
+    })).toMatchObject({ ROUTING_PROVIDER: "google" });
     expect(() => parseEnvironment({
       ...production,
-      ROUTING_PROVIDER: "mapbox",
-      ROUTING_API_URL: "https://api.mapbox.com/directions/v5/mapbox/driving"
+      ROUTING_PROVIDER: "google",
+      ROUTING_API_URL: "https://routes.googleapis.com/directions/v2:computeRoutes"
     })).toThrow("Invalid environment");
   });
 

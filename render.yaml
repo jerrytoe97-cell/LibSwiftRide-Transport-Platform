@@ -43,7 +43,7 @@ services:
           name: libswiftride-production-redis
           property: connectionString
       - key: CORS_ORIGINS
-        sync: false
+        value: https://libswiftride-web.onrender.com,https://libswiftride-passenger.onrender.com,https://libswiftride-driver.onrender.com,https://libswiftride-fleet.onrender.com,https://libswiftride-admin.onrender.com,https://libswiftride-dispatcher.onrender.com,https://libswiftride-business.onrender.com
       - key: JWT_ACCESS_SECRET
         generateValue: true
       - key: JWT_REFRESH_SECRET
@@ -55,10 +55,10 @@ services:
       - key: METRICS_TOKEN
         generateValue: true
       - key: ROUTING_PROVIDER
-        value: mapbox
+        value: google
       - key: ROUTING_API_URL
-        value: https://api.mapbox.com/directions/v5/mapbox/driving
-      - key: MAPBOX_ROUTING_TOKEN
+        value: https://routes.googleapis.com/directions/v2:computeRoutes
+      - key: GOOGLE_MAPS_SERVER_API_KEY
         sync: false
       - key: ROUTE_POINT_RETENTION_DAYS
         value: "30"

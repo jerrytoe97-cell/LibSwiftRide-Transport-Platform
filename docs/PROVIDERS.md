@@ -2,9 +2,9 @@
 
 ## Maps, routing and live GPS
 
-The device operating system supplies GPS coordinates. Mapbox is an optional paid map, routing and navigation provider; it does not replace the authenticated LibSwiftRide location stream.
+The device operating system supplies GPS coordinates. Google Maps Platform provides production maps, places and road routing; it does not replace the authenticated LibSwiftRide location stream.
 
-Mapbox remains opt-in. Set `VITE_MAP_PROVIDER=mapbox` only after billing approval and provide a dedicated public `pk.` token through `VITE_MAPBOX_ACCESS_TOKEN`. The UI refuses secret `sk.` tokens and otherwise keeps the OpenStreetMap preview. Use separate tokens for web, Android and iOS. Restrict the web token to approved HTTPS origins and least-privilege read scopes; native tokens cannot use web URL restrictions and must be isolated per mobile environment.
+Set `VITE_MAP_PROVIDER=google` in production. The API uses `GOOGLE_MAPS_SERVER_API_KEY` only for Routes API calls and never returns it to clients. Browser applications use a separate `VITE_GOOGLE_MAPS_BROWSER_API_KEY` for Maps JavaScript API and Places API (New). Restrict the server key by API and by Render egress IP where practical; restrict the browser key to the seven exact HTTPS Render origins and only the required browser APIs. Never reuse keys across these trust boundaries. Without a browser key, the UI retains its non-production OpenStreetMap preview.
 
 Do not commit tokens. Configure account spending alerts and usage monitoring before staging. Production routing must use an approved server-side adapter with timeouts, retry limits and usage metrics; it must not silently fall back to the public OSRM demonstration endpoint. GPS authorization, trip-scoped WebSocket subscriptions and route-point retention remain enforced by LibSwiftRide regardless of the selected map provider.
 

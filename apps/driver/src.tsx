@@ -270,7 +270,7 @@ function App() {
       : { latitude: dashboard.activeRide.pickupLatitude, longitude: dashboard.activeRide.pickupLongitude }
     : null;
   const navigationUrl = navigationTarget
-    ? `https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=${coords.latitude}%2C${coords.longitude}%3B${navigationTarget.latitude}%2C${navigationTarget.longitude}`
+    ? `https://www.google.com/maps/dir/?api=1&origin=${coords.latitude}%2C${coords.longitude}&destination=${navigationTarget.latitude}%2C${navigationTarget.longitude}&travelmode=driving`
     : "";
   return (
     <Shell product="Driver" demoRole="DRIVER">

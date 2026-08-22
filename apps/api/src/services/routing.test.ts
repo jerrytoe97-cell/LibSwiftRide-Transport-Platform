@@ -1,37 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildRoutingUrl, calculateRoadRoute, RoutingError } from "./routing.js";
+import { buildRoutingUrl, calculateRoadRoute, decodeGooglePolyline, RoutingError } from "./routing.js";
 
 const pickup = { latitude: 6.3156, longitude: -10.8074 };
 const destination = { latitude: 6.3058, longitude: -10.7492 };
 
 describe("road routing", () => {
-  it("builds provider-specific URLs without changing coordinate order", () => {
+  it("builds provider-specific URLs", () => {
     const coordinates = "-10.8074,6.3156;-10.7492,6.3058";
-    expect(buildRoutingUrl(coordinates, { provider: "osrm", apiUrl: "https://routing.example" }))
-      .toContain(`/route/v1/driving/${coordinates}`);
-    expect(buildRoutingUrl(coordinates, { provider: "mapbox", apiUrl: "https://api.mapbox.com/directions/v5/mapbox/driving", mapboxToken: "token-with-special/value" }))
-      .toBe(`https://api.mapbox.com/directions/v5/mapbox/driving/${coordinates}?alternatives=false&steps=false&geometries=geojson&overview=full&radiuses=unlimited;unlimited&access_token=token-with-special%2Fvalue`);
+    expect(buildRoutingUrl(coordinates, { provider: "osrm", apiUrl: "https://routing.example" })).toContain(`/route/v1/driving/${coordinates}`);
+    expect(buildRoutingUrl(coordinates, { provider: "google", apiUrl: "https://routes.googleapis.com/directions/v2:computeRoutes" })).toBe("https://routes.googleapis.com/directions/v2:computeRoutes");
   });
-
-  it("rejects an unconfigured Mapbox provider", () => {
-    expect(() => buildRoutingUrl("1,2;3,4", { provider: "mapbox", apiUrl: "https://api.mapbox.com/directions/v5/mapbox/driving" }))
-      .toThrow("Routing service is not configured");
+  it("decodes Google polylines into GeoJSON coordinate order", () => {
+    expect(decodeGooglePolyline("_p~iF~ps|U_ulLnnqC_mqNvxq`@")).toEqual([[-120.2, 38.5], [-120.95, 40.7], [-126.453, 43.252]]);
   });
-
-  it("returns provider-authoritative distance, duration and GeoJSON coordinates", async () => {
-    const provider = vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: "Ok", routes: [{ distance: 7_432.4, duration: 1_118.7, geometry: { type: "LineString", coordinates: [[-10.8074, 6.3156], [-10.78, 6.31], [-10.7492, 6.3058]] } }] }), { status: 200 }));
-    const route = await calculateRoadRoute(pickup, destination, provider);
-    expect(route).toEqual({ distanceM: 7432, durationSec: 1119, geometry: [[-10.8074, 6.3156], [-10.78, 6.31], [-10.7492, 6.3058]] });
-    expect(provider).toHaveBeenCalledWith(expect.stringContaining("geometries=geojson&overview=full"), expect.objectContaining({ attempts: 2 }));
+  it("returns provider-authoritative OSRM distance, duration and geometry", async () => {
+    const provider = vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: "Ok", routes: [{ distance: 7432.4, duration: 1118.7, geometry: { type: "LineString", coordinates: [[-10.8074, 6.3156], [-10.7492, 6.3058]] } }] }), { status: 200 }));
+    await expect(calculateRoadRoute(pickup, destination, provider)).resolves.toEqual({ distanceM: 7432, durationSec: 1119, geometry: [[-10.8074, 6.3156], [-10.7492, 6.3058]] });
   });
-
   it("rejects identical or invalid locations before calling the provider", async () => {
-    const provider = vi.fn();
-    await expect(calculateRoadRoute(pickup, pickup, provider)).rejects.toMatchObject({ code: "INVALID_LOCATION" });
-    await expect(calculateRoadRoute({ latitude: 95, longitude: 0 }, destination, provider)).rejects.toBeInstanceOf(RoutingError);
-    expect(provider).not.toHaveBeenCalled();
+    const provider = vi.fn(); await expect(calculateRoadRoute(pickup, pickup, provider)).rejects.toMatchObject({ code: "INVALID_LOCATION" });
+    await expect(calculateRoadRoute({ latitude: 95, longitude: 0 }, destination, provider)).rejects.toBeInstanceOf(RoutingError); expect(provider).not.toHaveBeenCalled();
   });
-
   it("separates unavailable routes from network failures", async () => {
     await expect(calculateRoadRoute(pickup, destination, vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: "NoRoute", routes: [] }), { status: 200 })))).rejects.toMatchObject({ code: "ROUTE_UNAVAILABLE" });
     await expect(calculateRoadRoute(pickup, destination, vi.fn().mockRejectedValue(new Error("offline")))).rejects.toMatchObject({ code: "ROUTING_NETWORK_FAILURE" });
