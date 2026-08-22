@@ -1,43 +1,49 @@
 databases:
-  - name: libswiftride-postgres
-    plan: starter
+  - name: libswiftride-production-postgres
+    plan: basic-1gb
+    region: frankfurt
     databaseName: libswiftride
     user: libswiftride
+    postgresMajorVersion: "17"
     ipAllowList: []
+    storageAutoscalingEnabled: true
 
 services:
-  - type: redis
-    name: libswiftride-redis
+  - type: keyvalue
+    name: libswiftride-production-redis
     plan: starter
+    region: frankfurt
     ipAllowList: []
     maxmemoryPolicy: allkeys-lru
+    persistenceMode: journal-snapshot
 
   - type: web
     name: libswiftride-api
     runtime: docker
+    plan: standard
+    region: frankfurt
     dockerfilePath: ./Dockerfile
+    dockerCommand: node apps/api/dist/server.js
+    preDeployCommand: node apps/api/node_modules/prisma/build/index.js migrate deploy --schema apps/api/prisma/schema.prisma
     healthCheckPath: /health/ready
     autoDeployTrigger: checksPass
-    preDeployCommand: node apps/api/node_modules/prisma/build/index.js migrate deploy --schema apps/api/prisma/schema.prisma
+    maxShutdownDelaySeconds: 30
     envVars:
-      - key: DATABASE_URL
-        fromDatabase: { name: libswiftride-postgres, property: connectionString }
-      - key: REDIS_URL
-        fromService: { type: redis, name: libswiftride-redis, property: connectionString }
       - key: NODE_ENV
         value: production
       - key: API_PORT
-        value: "4000"
+        value: "10000"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: libswiftride-production-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: libswiftride-production-redis
+          property: connectionString
       - key: CORS_ORIGINS
         sync: false
-      - key: ROUTING_API_URL
-        value: https://api.mapbox.com/directions/v5/mapbox/driving
-      - key: ROUTING_PROVIDER
-        value: mapbox
-      - key: MAPBOX_ROUTING_TOKEN
-        sync: false
-      - key: ROUTE_POINT_RETENTION_DAYS
-        value: "30"
       - key: JWT_ACCESS_SECRET
         generateValue: true
       - key: JWT_REFRESH_SECRET
@@ -48,38 +54,14 @@ services:
         generateValue: true
       - key: METRICS_TOKEN
         generateValue: true
-      - key: PAYMENTS_ENABLED
-        value: "false"
-      - key: KYC_STORAGE_PROVIDER
-        value: disabled
-      - key: KYC_SCANNER_PROVIDER
-        value: disabled
-      - key: KYC_FICTIONAL_ONLY
-        value: "true"
-      - key: KYC_UPLOAD_MAX_BYTES
-        value: "5242880"
-      - key: KYC_S3_ENDPOINT
+      - key: ROUTING_PROVIDER
+        value: mapbox
+      - key: ROUTING_API_URL
+        value: https://api.mapbox.com/directions/v5/mapbox/driving
+      - key: MAPBOX_ROUTING_TOKEN
         sync: false
-      - key: KYC_S3_REGION
-        sync: false
-      - key: KYC_S3_BUCKET
-        sync: false
-      - key: KYC_S3_ACCESS_KEY_ID
-        sync: false
-      - key: KYC_S3_SECRET_ACCESS_KEY
-        sync: false
-      - key: KYC_S3_FORCE_PATH_STYLE
-        value: "false"
-      - key: KYC_S3_SERVER_SIDE_ENCRYPTION
-        value: provider
-      - key: KYC_S3_KMS_KEY_ID
-        sync: false
-      - key: KYC_SCANNER_URL
-        sync: false
-      - key: KYC_SCANNER_TOKEN
-        sync: false
-      - key: KYC_SCANNER_TIMEOUT_MS
-        value: "10000"
+      - key: ROUTE_POINT_RETENTION_DAYS
+        value: "30"
       - key: NOTIFICATION_PROVIDER
         value: hooks
       - key: EMAIL_PROVIDER
@@ -88,8 +70,6 @@ services:
         value: support@libswiftride.com
       - key: EMAIL_REPLY_TO
         value: support@libswiftride.com
-      - key: RESEND_API_KEY
-        sync: false
       - key: ZOHO_SMTP_HOST
         value: smtppro.zoho.com
       - key: ZOHO_SMTP_PORT
@@ -100,88 +80,21 @@ services:
         value: support@libswiftride.com
       - key: ZOHO_SMTP_APP_PASSWORD
         sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: PAYMENTS_ENABLED
+        value: "false"
       - key: PAYMENT_PROVIDER
         value: sandbox
       - key: ORANGE_MONEY_NUMBER
         sync: false
       - key: MTN_MOMO_NUMBER
         sync: false
-
-  - type: web
-    name: libswiftride-web
-    runtime: static
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @libswiftride/web build
-    staticPublishPath: apps/web/dist
-    autoDeployTrigger: checksPass
-    envVars: &frontendEnv
-      - key: VITE_API_URL
-        value: https://libswiftride-transport-platform.onrender.com/api/v1
-      - key: VITE_WS_URL
-        value: wss://libswiftride-transport-platform.onrender.com/ws
-      - key: VITE_MAP_PROVIDER
-        sync: false
-      - key: VITE_MAPBOX_ACCESS_TOKEN
-        sync: false
-      - key: VITE_WEB_URL
-        value: https://libswiftride-web.onrender.com
-      - key: VITE_PASSENGER_APP_URL
-        value: https://libswiftride-passenger.onrender.com
-      - key: VITE_DRIVER_APP_URL
-        value: https://libswiftride-driver.onrender.com
-      - key: VITE_FLEET_APP_URL
-        value: https://libswiftride-fleet.onrender.com
-      - key: VITE_ADMIN_APP_URL
-        value: https://libswiftride-admin.onrender.com
-      - key: VITE_DISPATCHER_APP_URL
-        value: https://libswiftride-dispatcher.onrender.com
-      - key: VITE_BUSINESS_APP_URL
-        value: https://libswiftride-business.onrender.com
-    routes: [{ type: rewrite, source: "/*", destination: "/index.html" }]
-  - type: web
-    name: libswiftride-passenger
-    runtime: static
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @libswiftride/passenger build
-    staticPublishPath: apps/passenger/dist
-    autoDeployTrigger: checksPass
-    envVars: *frontendEnv
-    routes: [{ type: rewrite, source: "/*", destination: "/index.html" }]
-  - type: web
-    name: libswiftride-driver
-    runtime: static
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @libswiftride/driver build
-    staticPublishPath: apps/driver/dist
-    autoDeployTrigger: checksPass
-    envVars: *frontendEnv
-    routes: [{ type: rewrite, source: "/*", destination: "/index.html" }]
-  - type: web
-    name: libswiftride-fleet
-    runtime: static
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @libswiftride/fleet build
-    staticPublishPath: apps/fleet/dist
-    autoDeployTrigger: checksPass
-    envVars: *frontendEnv
-    routes: [{ type: rewrite, source: "/*", destination: "/index.html" }]
-  - type: web
-    name: libswiftride-admin
-    runtime: static
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @libswiftride/admin build
-    staticPublishPath: apps/admin/dist
-    autoDeployTrigger: checksPass
-    envVars: *frontendEnv
-    routes: [{ type: rewrite, source: "/*", destination: "/index.html" }]
-  - type: web
-    name: libswiftride-dispatcher
-    runtime: static
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @libswiftride/dispatcher build
-    staticPublishPath: apps/dispatcher/dist
-    autoDeployTrigger: checksPass
-    envVars: *frontendEnv
-    routes: [{ type: rewrite, source: "/*", destination: "/index.html" }]
-  - type: web
-    name: libswiftride-business
-    runtime: static
-    buildCommand: corepack enable && pnpm install --frozen-lockfile && pnpm --filter @libswiftride/business build
-    staticPublishPath: apps/business/dist
-    autoDeployTrigger: checksPass
-    envVars: *frontendEnv
-    routes: [{ type: rewrite, source: "/*", destination: "/index.html" }]
+      - key: KYC_STORAGE_PROVIDER
+        value: disabled
+      - key: KYC_SCANNER_PROVIDER
+        value: disabled
+      - key: KYC_FICTIONAL_ONLY
+        value: "true"
+      - key: KYC_UPLOAD_MAX_BYTES
+        value: "5242880"
