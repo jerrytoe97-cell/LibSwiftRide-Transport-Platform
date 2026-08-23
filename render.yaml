@@ -1,6 +1,6 @@
 databases:
   - name: libswiftride-production-postgres
-    plan: basic-1gb
+    plan: basic-256mb
     region: frankfurt
     databaseName: libswiftride
     user: libswiftride
@@ -20,7 +20,7 @@ services:
   - type: web
     name: libswiftride-api
     runtime: docker
-    plan: standard
+    plan: starter
     region: frankfurt
     dockerfilePath: ./Dockerfile
     dockerCommand: node apps/api/dist/server.js

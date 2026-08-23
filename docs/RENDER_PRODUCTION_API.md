@@ -9,7 +9,7 @@ production backend resources without replacing the seven static frontends.
 | --- | --- |
 | Type / runtime | Web Service / Docker |
 | Name | `libswiftride-api` |
-| Region / instance | Frankfurt / Standard |
+| Region / instance | Frankfurt / Starter |
 | Dockerfile | `./Dockerfile` |
 | Build command | None; Render builds the Dockerfile with BuildKit |
 | Pre-deploy | `node apps/api/node_modules/prisma/build/index.js migrate deploy --schema apps/api/prisma/schema.prisma` |
@@ -21,7 +21,7 @@ The readiness route checks PostgreSQL and Redis-compatible Key Value access.
 
 ## Production dependencies
 
-- `libswiftride-production-postgres`: Postgres 17, Basic 1 GB, Frankfurt,
+- `libswiftride-production-postgres`: Postgres 17, Basic 256 MB, Frankfurt,
   internal-only access, storage autoscaling enabled.
 - `libswiftride-production-redis`: Key Value Starter, Frankfurt, internal-only
   access, journal-and-snapshot persistence.
