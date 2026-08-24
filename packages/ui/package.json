@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@libswiftride/sdk": "workspace:*",
-    "maplibre-gl": "^6.0.0"
+    "maplibre-gl": "^6.4.1"
   },
   "peerDependencies": {
     "react": "^19.1.0"
