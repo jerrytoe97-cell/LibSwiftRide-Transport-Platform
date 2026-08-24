@@ -52,6 +52,14 @@ describe("SDK", () => {
     await new LibSwiftRideClient().request("/auth/register");
     expect(fetchMock).toHaveBeenCalledWith("http://localhost:4000/api/v1/auth/register", expect.any(Object));
   });
+  it("preserves an explicit image content type for authenticated profile uploads", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ data: { available: true } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const image = new Blob([new Uint8Array([0xff, 0xd8, 0xff])], { type: "image/jpeg" });
+    await new LibSwiftRideClient().request("/profile/photo", { method: "PUT", headers: { "content-type": image.type }, body: image });
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect(new Headers(init.headers).get("content-type")).toBe("image/jpeg");
+  });
 });
 
 describe("role-bound login", () => {

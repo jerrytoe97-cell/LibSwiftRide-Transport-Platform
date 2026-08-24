@@ -22,10 +22,29 @@ import { decryptMfaSecret, encryptMfaSecret, generateMfaSecret, generateRecovery
 import { liberianPhoneLookupCandidates, normalizeLiberianPhone, selectAuthenticatedIdentity, strongPasswordSchema } from "./services/identity.js";
 import { allowedKycMimeTypes, createKycDownloadUrl, createKycUploadIntent, deleteKycObject, kycUploadEnabled, verifyAndScanKycObject } from "./services/kyc-storage.js";
 import { transactionalEmailContent } from "./services/transactional-email-templates.js";
+import { PROFILE_PHOTO_MAX_BYTES, canShareRideContact, profilePhotoMimeTypes, validateProfilePhoto } from "./services/profile-photo.js";
 
 export const api = Router();
 const asyncRoute = (handler: (req: any, res: any) => Promise<unknown>) =>
   (req: any, res: any, next: any) => Promise.resolve(handler(req, res)).catch(next);
+
+api.get("/profile/photo", authenticate, asyncRoute(async (req, res) => {
+  const photo = await prisma.profilePhoto.findUnique({ where: { userId: req.user!.sub } });
+  if (!photo) return res.status(404).json({ error: { code: "PROFILE_PHOTO_NOT_FOUND", message: "No profile photo has been uploaded" } });
+  res.setHeader("content-type", photo.mimeType);
+  res.setHeader("cache-control", "private, no-store");
+  res.send(Buffer.from(photo.bytes));
+}));
+
+api.put("/profile/photo", authenticate, authorize("PASSENGER", "DRIVER"), asyncRoute(async (req, res) => {
+  const mimeType = String(req.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
+  if (!profilePhotoMimeTypes.includes(mimeType as typeof profilePhotoMimeTypes[number])) return res.status(415).json({ error: { code: "PROFILE_PHOTO_TYPE_UNSUPPORTED", message: "Profile photos must be JPEG, PNG, or WebP images" } });
+  const bytes = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+  const validated = validateProfilePhoto(bytes, mimeType);
+  const photo = await prisma.profilePhoto.upsert({ where: { userId: req.user!.sub }, update: { bytes, ...validated }, create: { userId: req.user!.sub, bytes, ...validated } });
+  await writeAudit({ actorId: req.user!.sub, action: "PROFILE_PHOTO_UPDATED", entityType: "ProfilePhoto", entityId: photo.id, ipAddress: req.ip, metadata: { mimeType: validated.mimeType, sizeBytes: validated.sizeBytes } });
+  res.json({ data: { available: true, maxBytes: PROFILE_PHOTO_MAX_BYTES } });
+}));
 
 const registration = z.object({
   phone: z.string().transform((value, context) => {
@@ -388,13 +407,12 @@ api.post("/rides/quote", authenticate, authorize("PASSENGER"), asyncRoute(async 
   const input = quoteInput.extend({ promoCode: z.string().optional(), rideType }).parse(req.body);
   const promo = input.promoCode ? await prisma.promoCode.findFirst({ where: { code: input.promoCode.toUpperCase(), active: true, startsAt: { lte: new Date() }, expiresAt: { gte: new Date() } } }) : null;
   try {
-    const route = await calculateRoadRoute(input.pickup, input.destination);
+    const route = await calculateRoadRoute(input.pickup, input.destination, undefined, { requestId: req.id });
     const fare = calculateFare({ distanceM: route.distanceM, durationSec: route.durationSec, demandMultiplier: await currentDemandMultiplier(input.pickup), ...(promo ? { promo } : {}) });
     res.json({ data: { ...fare, rideType: input.rideType, route: { geometry: route.geometry } } });
   } catch (error) {
     if (!(error instanceof RoutingError)) throw error;
-    const status = error.code === "ROUTING_NETWORK_FAILURE" ? 503 : 422;
-    res.status(status).json({ error: { code: error.code, message: error.message } });
+    res.status(error.httpStatus).json({ error: { code: error.code, message: error.message } });
   }
 }));
 
@@ -550,12 +568,28 @@ api.post("/promos/validate", authenticate, authorize("PASSENGER"), asyncRoute(as
 }));
 
 api.get("/rides/:id", authenticate, asyncRoute(async (req, res) => {
-  const ride = await prisma.ride.findUnique({ where: { id: req.params.id }, include: { driver: { include: { user: true, vehicle: true } }, payment: true } });
+  const ride = await prisma.ride.findUnique({ where: { id: req.params.id }, include: { passenger: { select: { id: true, firstName: true, lastName: true, phone: true, profilePhoto: { select: { id: true } } } }, driver: { include: { user: { select: { id: true, firstName: true, lastName: true, phone: true, profilePhoto: { select: { id: true } } } }, vehicle: true } }, payment: true } });
   if (!ride) return res.status(404).json({ error: { code: "NOT_FOUND", message: "Ride not found" } });
   const ownsRide = ride.passengerId === req.user!.sub || ride.driver?.userId === req.user!.sub;
   if (!ownsRide && !["ADMIN", "SUPPORT"].includes(req.user!.role)) return res.status(403).json({ error: { code: "FORBIDDEN", message: "Ride access denied" } });
+  const shareContact = canShareRideContact(ride, req.user!.sub);
   const driverRating = ride.driver ? await ratingSummary(ride.driver.userId) : null;
-  res.json({ data: { ...ride, driver: ride.driver ? { ...ride.driver, rating: driverRating } : null } });
+  const { passenger, ...rideData } = ride;
+  const driver = ride.driver ? { ...ride.driver, user: { id: ride.driver.user.id, firstName: ride.driver.user.firstName, lastName: ride.driver.user.lastName, ...(shareContact && ride.passengerId === req.user!.sub ? { phone: ride.driver.user.phone, photoAvailable: Boolean(ride.driver.user.profilePhoto), photoUrl: `/rides/${ride.id}/peer-photo` } : {}) }, rating: driverRating } : null;
+  const passengerContact = shareContact && ride.driver?.userId === req.user!.sub ? { id: passenger.id, firstName: passenger.firstName, lastName: passenger.lastName, phone: passenger.phone, photoAvailable: Boolean(passenger.profilePhoto), photoUrl: `/rides/${ride.id}/peer-photo` } : undefined;
+  res.setHeader("cache-control", "private, no-store");
+  res.json({ data: { ...rideData, driver, ...(passengerContact ? { passenger: passengerContact } : {}) } });
+}));
+
+api.get("/rides/:id/peer-photo", authenticate, asyncRoute(async (req, res) => {
+  const ride = await prisma.ride.findUnique({ where: { id: req.params.id }, include: { driver: { select: { userId: true } } } });
+  if (!ride || !canShareRideContact(ride, req.user!.sub)) return res.status(404).json({ error: { code: "PROFILE_PHOTO_NOT_FOUND", message: "Profile photo is unavailable" } });
+  const peerId = ride.passengerId === req.user!.sub ? ride.driver!.userId : ride.passengerId;
+  const photo = await prisma.profilePhoto.findUnique({ where: { userId: peerId } });
+  if (!photo) return res.status(404).json({ error: { code: "PROFILE_PHOTO_NOT_FOUND", message: "Profile photo is unavailable" } });
+  res.setHeader("content-type", photo.mimeType);
+  res.setHeader("cache-control", "private, no-store");
+  res.send(Buffer.from(photo.bytes));
 }));
 
 api.get("/rides/:id/receipt", authenticate, asyncRoute(async (req, res) => {
@@ -1309,7 +1343,7 @@ api.get("/drivers/me/dashboard", authenticate, authorize("DRIVER"), asyncRoute(a
     prisma.rating.aggregate({ where: { subjectId: req.user!.sub }, _avg: { score: true }, _count: true }),
     prisma.ride.findFirst({
       where: { driverId: driver.id, status: { in: ["DRIVER_ASSIGNED", "DRIVER_ARRIVING", "DRIVER_ARRIVED", "PASSENGER_BOARDED", "IN_PROGRESS"] } },
-      include: { passenger: { select: { firstName: true, lastName: true, phone: true } } },
+      include: { passenger: { select: { id: true, firstName: true, lastName: true, phone: true, profilePhoto: { select: { id: true } } } } },
       orderBy: { requestedAt: "desc" }
     }),
     prisma.notification.count({ where: { userId: req.user!.sub, readAt: null } }),
@@ -1328,7 +1362,7 @@ api.get("/drivers/me/dashboard", authenticate, authorize("DRIVER"), asyncRoute(a
       performance: { completedRides: earnings._count, cancelledRides, completionRate: earnings._count + cancelledRides ? earnings._count / (earnings._count + cancelledRides) : 0 },
       wallet,
       rating: { average: rating._avg.score, count: rating._count },
-      activeRide,
+      activeRide: activeRide ? { ...activeRide, passenger: { id: activeRide.passenger.id, firstName: activeRide.passenger.firstName, lastName: activeRide.passenger.lastName, phone: activeRide.passenger.phone, photoAvailable: Boolean(activeRide.passenger.profilePhoto), photoUrl: `/rides/${activeRide.id}/peer-photo` } } : null,
       unreadNotifications
     }
   });

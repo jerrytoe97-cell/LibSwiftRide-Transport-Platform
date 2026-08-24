@@ -134,6 +134,9 @@ export const environmentSchema = z.object({
     if (environment.ROUTING_PROVIDER === "google" && !environment.GOOGLE_MAPS_SERVER_API_KEY) {
       context.addIssue({ code: "custom", path: ["GOOGLE_MAPS_SERVER_API_KEY"], message: "GOOGLE_MAPS_SERVER_API_KEY is required when ROUTING_PROVIDER=google" });
     }
+    if (environment.ROUTING_PROVIDER === "google" && environment.ROUTING_API_URL !== "https://routes.googleapis.com/directions/v2:computeRoutes") {
+      context.addIssue({ code: "custom", path: ["ROUTING_API_URL"], message: "Google routing requires the Google Routes computeRoutes URL" });
+    }
     for (const [field, secret] of [["JWT_ACCESS_SECRET", environment.JWT_ACCESS_SECRET], ["JWT_REFRESH_SECRET", environment.JWT_REFRESH_SECRET], ["PAYMENT_WEBHOOK_SECRET", environment.PAYMENT_WEBHOOK_SECRET], ["MFA_ENCRYPTION_KEY", environment.MFA_ENCRYPTION_KEY ?? ""], ["RESEND_API_KEY", environment.RESEND_API_KEY ?? ""], ["ZOHO_SMTP_APP_PASSWORD", environment.ZOHO_SMTP_APP_PASSWORD ?? ""], ["GOOGLE_MAPS_SERVER_API_KEY", environment.GOOGLE_MAPS_SERVER_API_KEY ?? ""]] as const) {
       if (/replace|example|change|development|test-secret/i.test(secret)) {
         context.addIssue({ code: "custom", path: [field], message: `${field} contains a placeholder value` });

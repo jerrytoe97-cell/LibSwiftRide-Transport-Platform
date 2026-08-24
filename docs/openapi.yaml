@@ -153,7 +153,29 @@ paths:
       responses:
         "200": { description: Fare, distance, duration, ride type, and GeoJSON-order route coordinates }
         "422": { description: Invalid locations or no driving route is available }
-        "503": { description: Routing provider network failure }
+        "502": { description: Invalid request or malformed routing provider response }
+        "503": { description: Routing configuration, quota, network, or provider failure }
+  /profile/photo:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Download the authenticated user's private profile photo
+      responses:
+        "200": { description: JPEG, PNG, or WebP image }
+        "404": { description: No profile photo }
+    put:
+      security: [{ bearerAuth: [] }]
+      summary: Upload or replace the authenticated passenger or driver's private profile photo
+      requestBody:
+        required: true
+        content:
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/png: { schema: { type: string, format: binary } }
+          image/webp: { schema: { type: string, format: binary } }
+      responses:
+        "200": { description: Profile photo updated }
+        "413": { description: Image exceeds 2 MB }
+        "415": { description: Unsupported image content type }
+        "422": { description: File signature does not match the declared image type }
   /rides:
     get:
       security: [{ bearerAuth: [] }]
@@ -181,6 +203,18 @@ paths:
       responses:
         "200": { description: Ride }
         "403": { description: Access denied }
+  /rides/{id}/peer-photo:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Download the assigned peer's profile photo during an active ride
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200": { description: Assigned passenger or driver profile image }
+        "404": { description: Ride is inactive, requester is unrelated, or peer has no photo }
   /rides/{id}/transitions:
     post:
       security: [{ bearerAuth: [] }]

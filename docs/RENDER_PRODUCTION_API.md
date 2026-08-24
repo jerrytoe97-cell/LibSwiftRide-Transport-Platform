@@ -37,6 +37,7 @@ Enter these `sync: false` variables without committing their values:
   `passenger`, `driver`, `fleet`, `admin`, `dispatcher`, and `business` under
   `libswiftride-<name>.onrender.com`. It is not a secret and needs no manual value.
 - `GOOGLE_MAPS_SERVER_API_KEY`: server-restricted key with Routes API access.
+- `ROUTING_PROVIDER=google` and `ROUTING_API_URL=https://routes.googleapis.com/directions/v2:computeRoutes` must be configured together; startup validation rejects inconsistent production values.
 - `VITE_GOOGLE_MAPS_BROWSER_API_KEY`: configure separately on every static
   frontend, restricted to the seven production HTTPS origins and to Maps
   JavaScript API and Places API (New).

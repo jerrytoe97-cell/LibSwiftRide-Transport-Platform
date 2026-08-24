@@ -64,6 +64,7 @@ app.use("/api", (_req, res, next) => {
   res.setHeader("cache-control", "no-store");
   next();
 });
+app.use("/api/v1/profile/photo", express.raw({ type: ["image/jpeg", "image/png", "image/webp"], limit: "2mb" }));
 app.use(express.json({
   limit: "256kb",
   verify: (req, _res, buffer) => { (req as Request & { rawBody: string }).rawBody = buffer.toString(); }
@@ -103,6 +104,8 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
   if (kycCode && safeKycCodes.has(kycCode)) return res.status(422).json({ error: { code: kycCode, message: error instanceof Error ? error.message : "Document security validation failed" } });
   if (kycCode === "KYC_STORAGE_UNAVAILABLE") return res.status(503).json({ error: { code: kycCode, message: "Private document storage is unavailable" } });
   if (kycCode === "KYC_SCANNER_UNAVAILABLE") return res.status(503).json({ error: { code: kycCode, message: "Document security scanning is unavailable" } });
+  if (kycCode && ["PROFILE_PHOTO_TYPE_UNSUPPORTED", "PROFILE_PHOTO_TYPE_MISMATCH", "PROFILE_PHOTO_TOO_LARGE"].includes(kycCode)) return res.status(422).json({ error: { code: kycCode, message: error instanceof Error ? error.message : "Profile photo validation failed" } });
+  if (error && typeof error === "object" && "type" in error && error.type === "entity.too.large") return res.status(413).json({ error: { code: "PROFILE_PHOTO_TOO_LARGE", message: "Profile photos must be no larger than 2 MB" } });
   res.status(500).json({ error: { code: "INTERNAL_ERROR", message: "An unexpected error occurred" } });
 });
 

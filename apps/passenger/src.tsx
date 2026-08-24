@@ -30,11 +30,22 @@ type Ride = {
   scheduledFor?: string | null;
   payment?: { status: string; method: string } | null;
   driver?: {
-    user: { firstName: string; lastName: string };
+    user: { firstName: string; lastName: string; phone?: string; photoAvailable?: boolean; photoUrl?: string };
     vehicle: { make: string; model: string; color: string; plateNumber: string } | null;
     rating: { average: number | null; count: number };
   } | null;
 };
+
+function PrivatePhoto({ path, alt }: { path?: string | undefined; alt: string }) {
+  const [source, setSource] = useState("");
+  useEffect(() => {
+    let objectUrl = ""; let active = true;
+    if (!path) { setSource(""); return; }
+    apiClient.download(path).then((blob) => { if (active) { objectUrl = URL.createObjectURL(blob); setSource(objectUrl); } }).catch(() => setSource(""));
+    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [path]);
+  return source ? <img className="profile-photo" src={source} alt={alt} /> : <div className="profile-photo profile-photo-fallback" role="img" aria-label={`${alt} default avatar`}>LS</div>;
+}
 type Notification = { id: string; title: string; body: string; readAt: string | null };
 type FavouritePlace = { id: string; type: "HOME" | "WORK" | "CUSTOM"; label: string; address: string; latitude: number; longitude: number };
 type ChatMessage = { id: string; senderId: string; content: string; createdAt: string };
@@ -345,12 +356,23 @@ function App() {
       if (error instanceof ApiRequestError) {
         if (error.code === "INVALID_LOCATION") setMessage("Enter a valid pickup and destination at two different locations.");
         else if (error.code === "ROUTE_UNAVAILABLE") setMessage("No driving route is available between these locations. Choose another pickup or destination.");
-        else if (["NETWORK_FAILURE", "ROUTING_NETWORK_FAILURE"].includes(error.code)) setMessage("Network failure. Check your connection and try the estimate again.");
+        else if (error.code === "ROUTING_CONFIGURATION_ERROR") setMessage("Ride estimates are unavailable because the routing service needs configuration. Please contact LibSwiftRide support.");
+        else if (error.code === "ROUTING_RATE_LIMITED") setMessage("Routing is busy right now. Wait a moment, then try the estimate again.");
+        else if (["ROUTING_PROVIDER_FAILURE", "ROUTING_RESPONSE_INVALID"].includes(error.code)) setMessage("Routing is temporarily unavailable. Please try the estimate again shortly.");
+        else if (["NETWORK_FAILURE", "ROUTING_NETWORK_FAILURE"].includes(error.code)) setMessage("The routing service could not be reached. Check your connection and try again.");
         else setMessage(error.message);
       } else setMessage("Network failure. Check your connection and try the estimate again.");
     } finally {
       setQuoting(false);
     }
+  }
+
+  async function uploadProfilePhoto(file?: File) {
+    if (!file) return;
+    try {
+      await apiClient.request("/profile/photo", { method: "PUT", headers: { "content-type": file.type }, body: file });
+      setMessage("Profile photo updated securely.");
+    } catch (error) { setMessage((error as Error).message); }
   }
 
   async function book() {
@@ -617,7 +639,8 @@ function App() {
           })}
         </div>
         {activeRide.driver ? <div className="driver-details">
-          <div><strong>{activeRide.driver.user.firstName} {activeRide.driver.user.lastName}</strong><p>{activeRide.driver.rating.count ? `â˜… ${activeRide.driver.rating.average?.toFixed(1)} from ${activeRide.driver.rating.count} ratings` : "New driver Â· no ratings yet"}</p></div>
+          <PrivatePhoto path={activeRide.driver.user.photoAvailable ? activeRide.driver.user.photoUrl : undefined} alt={`${activeRide.driver.user.firstName} ${activeRide.driver.user.lastName}`} />
+          <div><strong>{activeRide.driver.user.firstName} {activeRide.driver.user.lastName}</strong><p>{activeRide.driver.rating.count ? `★ ${activeRide.driver.rating.average?.toFixed(1)} from ${activeRide.driver.rating.count} ratings` : "New driver · no ratings yet"}</p>{activeRide.driver.user.phone && <><p>{activeRide.driver.user.phone}</p><a className="action contact-link" href={`tel:${activeRide.driver.user.phone}`}>Call Driver</a></>}</div>
           <div><strong>{activeRide.driver.vehicle ? `${activeRide.driver.vehicle.color} ${activeRide.driver.vehicle.make} ${activeRide.driver.vehicle.model}` : "Vehicle details pending"}</strong><p>{activeRide.driver.vehicle?.plateNumber ?? "Plate pending"}</p></div>
         </div> : <p>{passengerMessage(locale, "matchingDriver")}</p>}
         {activeRide.status === "DRIVER_ARRIVED" && <button className="action" onClick={() => transitionRide(activeRide.id, "PASSENGER_BOARDED")}>{passengerMessage(locale, "confirmVehicle")}</button>}
@@ -625,6 +648,10 @@ function App() {
         <button className="action danger" type="button" onClick={() => { setCancelRideId(activeRide.id); setCancelReason("Plans changed"); }}>{passengerMessage(locale, "cancelRide")}</button>
         <p className="notice">{passengerMessage(locale, activeRide.payment?.status === "CAPTURED" ? "paymentConfirmed" : activeRide.paymentMethod === "CASH" ? "cashPaymentHint" : "electronicPaymentHint")}</p>
       </section>}
+      <section className="panel">
+        <h2>Profile photo</h2><p>JPEG, PNG, or WebP · maximum 2 MB.</p>
+        <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { void uploadProfilePhoto(event.target.files?.[0]); event.currentTarget.value = ""; }} />
+      </section>
       {sosRideId && <section className="panel" aria-labelledby="sos-title">
         <span className="eyebrow">{passengerMessage(locale, "emergencyAssistance")}</span>
         <h2 id="sos-title">{passengerMessage(locale, "sendSosAlert")}</h2>

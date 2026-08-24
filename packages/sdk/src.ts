@@ -134,7 +134,7 @@ export class LibSwiftRideClient {
 
   async request<T>(path: string, init: RequestInit & { idempotencyKey?: string; skipAuthRefresh?: boolean } = {}): Promise<T> {
     const headers = new Headers(init.headers);
-    headers.set("content-type", "application/json");
+    if (!headers.has("content-type")) headers.set("content-type", "application/json");
     if (this.accessToken) headers.set("authorization", `Bearer ${this.accessToken}`);
     if (init.idempotencyKey) headers.set("idempotency-key", init.idempotencyKey);
     const { skipAuthRefresh, ...requestInit } = init;

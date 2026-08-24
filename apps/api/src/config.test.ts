@@ -34,6 +34,12 @@ describe("production environment safeguards", () => {
       ROUTING_PROVIDER: "google",
       ROUTING_API_URL: "https://routes.googleapis.com/directions/v2:computeRoutes"
     })).toThrow("Invalid environment");
+    expect(() => parseEnvironment({
+      ...production,
+      ROUTING_PROVIDER: "google",
+      ROUTING_API_URL: "https://routing.example.test/computeRoutes",
+      GOOGLE_MAPS_SERVER_API_KEY: "google-server-key-value"
+    })).toThrow("Invalid environment");
   });
 
   it("requires complete protected email configuration when production delivery is enabled", () => {

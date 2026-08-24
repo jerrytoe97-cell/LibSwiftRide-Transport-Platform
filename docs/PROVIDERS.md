@@ -6,6 +6,8 @@ The device operating system supplies GPS coordinates. Google Maps Platform provi
 
 Set `VITE_MAP_PROVIDER=google` in production. The API uses `GOOGLE_MAPS_SERVER_API_KEY` only for Routes API calls and never returns it to clients. Browser applications use a separate `VITE_GOOGLE_MAPS_BROWSER_API_KEY` for Maps JavaScript API and Places API (New). Restrict the server key by API and by Render egress IP where practical; restrict the browser key to the seven exact HTTPS Render origins and only the required browser APIs. Never reuse keys across these trust boundaries. Without a browser key, the UI retains its non-production OpenStreetMap preview.
 
+Google routing must use `ROUTING_PROVIDER=google` and the exact `ROUTING_API_URL=https://routes.googleapis.com/directions/v2:computeRoutes`. The API safely distinguishes invalid requests, authentication/restriction failures, quota exhaustion, provider failures, malformed replies, network failures, and genuine zero-route results. Provider logs include only the request correlation ID, provider/status classification, and a sanitized message; keys and authorization data are never logged.
+
 Do not commit tokens. Configure account spending alerts and usage monitoring before staging. Production routing must use an approved server-side adapter with timeouts, retry limits and usage metrics; it must not silently fall back to the public OSRM demonstration endpoint. GPS authorization, trip-scoped WebSocket subscriptions and route-point retention remain enforced by LibSwiftRide regardless of the selected map provider.
 
 ## Payments

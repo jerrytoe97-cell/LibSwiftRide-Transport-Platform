@@ -9,8 +9,19 @@ type ActiveRide = {
   id: string; status: string; pickupAddress: string; pickupLatitude: number; pickupLongitude: number;
   destinationAddress: string; destinationLatitude: number; destinationLongitude: number;
   fareMinor: number; driverEarningsMinor: number; estimatedDistanceM: number; estimatedDurationSec: number; paymentMethod: string;
-  passenger: { firstName: string; lastName: string; phone: string };
+  passenger: { firstName: string; lastName: string; phone: string; photoAvailable?: boolean; photoUrl?: string };
 };
+
+function PrivatePhoto({ path, alt }: { path?: string | undefined; alt: string }) {
+  const [source, setSource] = useState("");
+  useEffect(() => {
+    let objectUrl = ""; let active = true;
+    if (!path) { setSource(""); return; }
+    apiClient.download(path).then((blob) => { if (active) { objectUrl = URL.createObjectURL(blob); setSource(objectUrl); } }).catch(() => setSource(""));
+    return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [path]);
+  return source ? <img className="profile-photo" src={source} alt={alt} /> : <div className="profile-photo profile-photo-fallback" role="img" aria-label={`${alt} default avatar`}>LS</div>;
+}
 type Dashboard = {
   driver: { firstName: string; lastName: string; status: string; verifiedAt: string | null; kycStatus: string | null; vehicle: { plateNumber: string } | null };
   earnings: { driverEarningsMinor: number; completedRides: number; currency: string; today: { driverEarningsMinor: number; completedRides: number }; lastSevenDays: { driverEarningsMinor: number; completedRides: number } };
@@ -223,6 +234,14 @@ function App() {
     }
   }
 
+  async function uploadProfilePhoto(file?: File) {
+    if (!file) return;
+    try {
+      await apiClient.request("/profile/photo", { method: "PUT", headers: { "content-type": file.type }, body: file });
+      setMessage("Profile photo updated securely.");
+    } catch (error) { setMessage((error as Error).message); }
+  }
+
   async function respondToOffer(decision: "accept" | "reject") {
     if (!dashboard?.activeRide || dashboard.activeRide.status !== "DRIVER_ASSIGNED") return;
     if (!networkOnline) {
@@ -320,8 +339,8 @@ function App() {
       </section>}
       <div hidden={onboarding === null}>
       {incomingRide && <section className="incoming-ride" aria-live="assertive">
-        <div><span className="eyebrow">Incoming ride request · {offerSeconds}s</span><h1>{incomingRide.passenger.firstName} needs a ride</h1><p>{incomingRide.pickupAddress} → {incomingRide.destinationAddress}</p></div>
-        <div className="offer-metrics"><span><small>Estimated time</small><strong>{Math.max(1, Math.round(incomingRide.estimatedDurationSec / 60))} min</strong></span><span><small>Trip distance</small><strong>{(incomingRide.estimatedDistanceM / 1000).toFixed(1)} km</strong></span><span><small>Your earnings</small><strong>{money(incomingRide.driverEarningsMinor)}</strong></span><span><small>Payment</small><strong>{incomingRide.paymentMethod.replaceAll("_", " ")}</strong></span></div>
+        <div><span className="eyebrow">Incoming ride request · {offerSeconds}s</span><div className="driver-details"><PrivatePhoto path={incomingRide.passenger.photoAvailable ? incomingRide.passenger.photoUrl : undefined} alt={`${incomingRide.passenger.firstName} ${incomingRide.passenger.lastName}`} /><div><h1>{incomingRide.passenger.firstName} {incomingRide.passenger.lastName}</h1><p>{incomingRide.passenger.phone}</p><a className="action contact-link" href={`tel:${incomingRide.passenger.phone}`}>Call Passenger</a></div></div><p>{incomingRide.pickupAddress} → {incomingRide.destinationAddress}</p></div>
+        <div className="offer-metrics"><span><small>Ride type</small><strong>Economy</strong></span><span><small>Estimated time</small><strong>{Math.max(1, Math.round(incomingRide.estimatedDurationSec / 60))} min</strong></span><span><small>Trip distance</small><strong>{(incomingRide.estimatedDistanceM / 1000).toFixed(1)} km</strong></span><span><small>Fare</small><strong>{money(incomingRide.fareMinor)}</strong></span><span><small>Your earnings</small><strong>{money(incomingRide.driverEarningsMinor)}</strong></span><span><small>Payment</small><strong>{incomingRide.paymentMethod.replaceAll("_", " ")}</strong></span></div>
         <div className="offer-actions"><Action disabled={!networkOnline} onClick={() => respondToOffer("accept")}>Accept ride</Action><button className="reject-offer" disabled={!networkOnline} onClick={() => respondToOffer("reject")}>Decline</button></div>
       </section>}
       <div className="toolbar">
@@ -341,6 +360,7 @@ function App() {
         <div className="panel">
           <span className="eyebrow">Current assignment</span>
           {dashboard?.activeRide && !incomingRide ? <>
+            <div className="driver-details"><PrivatePhoto path={dashboard.activeRide.passenger.photoAvailable ? dashboard.activeRide.passenger.photoUrl : undefined} alt={`${dashboard.activeRide.passenger.firstName} ${dashboard.activeRide.passenger.lastName}`} /><div><h2>Passenger</h2><strong>{dashboard.activeRide.passenger.firstName} {dashboard.activeRide.passenger.lastName}</strong><p>{dashboard.activeRide.passenger.phone}</p></div></div>
             <h2>{dashboard.activeRide.status.replaceAll("_", " ")}</h2>
             <p>{dashboard.activeRide.pickupAddress} → {dashboard.activeRide.destinationAddress}</p>
             <p><strong>{money(dashboard.activeRide.fareMinor)}</strong></p>
@@ -354,6 +374,7 @@ function App() {
           <p>{dashboard?.unreadNotifications ?? 0} unread notifications</p>
         </div>
       </section>
+      <section className="panel"><h2>Profile photo</h2><p>JPEG, PNG, or WebP · maximum 2 MB.</p><input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { void uploadProfilePhoto(event.target.files?.[0]); event.currentTarget.value = ""; }} /></section>
       {dashboard?.activeRide && <section className="panel" aria-live="polite">
         <h2>Passenger chat</h2>
         {chatMessages.map((chat) => <p key={chat.id}>{chat.content}<br /><small>{new Date(chat.createdAt).toLocaleTimeString("en-LR")}</small></p>)}

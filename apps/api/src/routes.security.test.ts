@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import { api } from "./routes.js";
 
 type RouteLayer = {
@@ -42,9 +43,26 @@ describe("API authorization contract", () => {
     expect([...publicRoutes].filter((route) => !implemented.has(route))).toEqual([]);
   });
 
+  it("keeps peer photos authenticated and ride-scoped", () => {
+    for (const path of ["/profile/photo", "/rides/:id/peer-photo"]) {
+      const matching = routes.filter((route) => route.path === path);
+      expect(matching.length).toBeGreaterThan(0);
+      expect(matching.every((route) => route.handlers.some((handler) => handler.securityControl === "authenticate"))).toBe(true);
+    }
+  });
+
+  it("does not use an unrestricted user include in participant ride detail", () => {
+    const source = readFileSync(new URL("./routes.ts", import.meta.url), "utf8");
+    const detail = source.slice(source.indexOf('api.get("/rides/:id"'), source.indexOf('api.get("/rides/:id/peer-photo"'));
+    expect(detail).not.toContain("user: true");
+    expect(detail).not.toContain("passwordHash");
+    expect(detail).toContain("canShareRideContact");
+  });
+
   it.each([
     ["POST", "/rides/quote", ["PASSENGER"]],
     ["POST", "/rides", ["PASSENGER"]],
+    ["PUT", "/profile/photo", ["PASSENGER", "DRIVER"]],
     ["POST", "/drivers/rides/:id/accept", ["DRIVER"]],
     ["POST", "/drivers/rides/:id/reject", ["DRIVER"]],
     ["POST", "/drivers/kyc/submit", ["DRIVER"]],
