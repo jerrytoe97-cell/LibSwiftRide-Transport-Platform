@@ -422,10 +422,10 @@ function App() {
           const address = await reverseGeocode(latitude, longitude, googleMapsBrowserKey);
           setPickup({ address, latitude, longitude });
           setMessage(`Pickup set to ${address}. GPS accuracy is about ${Math.round(accuracy)} m.`);
-        } catch {
+        } catch (error) {
           const fallback = `GPS location (${latitude.toFixed(5)}, ${longitude.toFixed(5)})`;
           setPickup({ address: fallback, latitude, longitude });
-          setMessage(`Pickup coordinates are ready, but the readable address could not be loaded. GPS accuracy is about ${Math.round(accuracy)} m; you can still request an estimate.`);
+          setMessage(`${(error as Error).message} Pickup coordinates are still ready. GPS accuracy is about ${Math.round(accuracy)} m; you can still request an estimate.`);
         } finally {
           setLocating(false);
         }

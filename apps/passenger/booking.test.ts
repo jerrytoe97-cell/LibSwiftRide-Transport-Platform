@@ -22,13 +22,26 @@ describe("Passenger fare estimate inputs", () => {
 
 describe("GPS reverse geocoding", () => {
   it("returns Google's exact formatted address", async () => {
-    const request = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "OK", results: [{ formatted_address: "Broad Street, Monrovia, Liberia" }] }), { status: 200 }));
-    await expect(reverseGeocode(6.3156, -10.8074, "browser-key", request)).resolves.toBe("Broad Street, Monrovia, Liberia");
-    expect(request).toHaveBeenCalledWith(expect.stringContaining("latlng=6.3156%2C-10.8074"));
+    const geocode = vi.fn().mockResolvedValue({ results: [{ formatted_address: "Broad Street, Monrovia, Liberia" }] });
+    const importLibrary = vi.fn().mockResolvedValue({ Geocoder: class { geocode = geocode; } });
+    const loadMaps = vi.fn().mockResolvedValue({ importLibrary });
+
+    await expect(reverseGeocode(6.3156, -10.8074, "browser-key", loadMaps)).resolves.toBe("Broad Street, Monrovia, Liberia");
+    expect(loadMaps).toHaveBeenCalledWith("browser-key");
+    expect(importLibrary).toHaveBeenCalledWith("geocoding");
+    expect(geocode).toHaveBeenCalledWith({ location: { lat: 6.3156, lng: -10.8074 } });
+  });
+
+  it("uses a coordinate label when Google returns no readable results", async () => {
+    const importLibrary = vi.fn().mockResolvedValue({ Geocoder: class { geocode = vi.fn().mockResolvedValue({ results: [] }); } });
+    await expect(reverseGeocode(6.3156, -10.8074, "browser-key", vi.fn().mockResolvedValue({ importLibrary })))
+      .resolves.toBe(coordinateAddress(6.3156, -10.8074));
   });
 
   it("uses a coordinate label without a browser key and surfaces provider failures", async () => {
     await expect(reverseGeocode(6.3156, -10.8074, undefined)).resolves.toBe(coordinateAddress(6.3156, -10.8074));
-    await expect(reverseGeocode(6.3156, -10.8074, "browser-key", vi.fn().mockResolvedValue(new Response(null, { status: 503 })))).rejects.toThrow("temporarily unavailable");
+    const importLibrary = vi.fn().mockResolvedValue({ Geocoder: class { geocode = vi.fn().mockRejectedValue(new Error("REQUEST_DENIED")); } });
+    await expect(reverseGeocode(6.3156, -10.8074, "browser-key", vi.fn().mockResolvedValue({ importLibrary })))
+      .rejects.toThrow("readable address service is temporarily unavailable");
   });
 });
