@@ -384,7 +384,7 @@ api.get("/payments/mobile-money/:method/display", authenticate, authorize("PASSE
   res.json({ data: { method, paymentNumber } });
 }));
 
-api.post("/rides/quote", authenticate, asyncRoute(async (req, res) => {
+api.post("/rides/quote", authenticate, authorize("PASSENGER"), asyncRoute(async (req, res) => {
   const input = quoteInput.extend({ promoCode: z.string().optional(), rideType }).parse(req.body);
   const promo = input.promoCode ? await prisma.promoCode.findFirst({ where: { code: input.promoCode.toUpperCase(), active: true, startsAt: { lte: new Date() }, expiresAt: { gte: new Date() } } }) : null;
   try {

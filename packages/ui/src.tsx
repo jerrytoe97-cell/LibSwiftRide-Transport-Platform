@@ -611,7 +611,7 @@ export function Map({ latitude = 6.3156, longitude = -10.8074, label = "Monrovia
   }, [mapReady, latitude, longitude, pickup?.latitude, pickup?.longitude, destination?.latitude, destination?.longitude, drivers, route]);
 
   return <div className="map-frame" aria-label={label}>
-    <div className="mapbox-map" ref={container} />
+    <div className="app-map" ref={container} />
     <div className="map-overlay"><span className="live-dot" /> {label}<small>{googleMapsBrowserKey ? "Google Maps" : "OpenStreetMap preview"}</small></div>
   </div>;
 }

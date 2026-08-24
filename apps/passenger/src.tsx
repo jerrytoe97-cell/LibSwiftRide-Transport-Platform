@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ApiRequestError, apiClient, message as translatedMessage, money, passengerMessage, rideStatusLabel, supportedLocales, type SupportedLocale } from "@libswiftride/sdk";
 import { Map, Shell, Stat, useNetworkStatus } from "@libswiftride/ui";
+import { estimateValidationError, quoteRequestBody, reverseGeocode } from "./booking.js";
 import "@libswiftride/ui/styles.css";
 
 type Quote = {
@@ -182,6 +183,8 @@ function App() {
   const [pickup, setPickup] = useState<Location>(defaultLocations.pickup);
   const [destination, setDestination] = useState<Location>(defaultLocations.destination);
   const [locating, setLocating] = useState(false);
+  const [gpsAccuracyM, setGpsAccuracyM] = useState<number | null>(null);
+  const [quoting, setQuoting] = useState(false);
   const [booking, setBooking] = useState(false);
   const [cancelRideId, setCancelRideId] = useState<string | null>(null);
   const [cancelReason, setCancelReason] = useState("Plans changed");
@@ -322,24 +325,18 @@ function App() {
   }, [paymentMethod]);
 
   async function getQuote() {
-    if (!networkOnline) {
-      setMessage("You are offline. Reconnect before requesting a fare estimate.");
-      return;
-    }
-    const validLocation = (location: Location) => location.address.trim().length > 0
-      && Number.isFinite(location.latitude) && location.latitude >= -90 && location.latitude <= 90
-      && Number.isFinite(location.longitude) && location.longitude >= -180 && location.longitude <= 180;
-    if (!validLocation(pickup) || !validLocation(destination)
-      || (pickup.latitude === destination.latitude && pickup.longitude === destination.longitude)) {
+    const validationError = estimateValidationError(networkOnline, pickup, destination);
+    if (validationError) {
       setQuote(null);
-      setMessage("Enter a valid pickup and destination at two different locations.");
+      setMessage(validationError);
       return;
     }
     try {
+      setQuoting(true);
       setQuote(null);
       const response = await apiClient.request<{ data: Quote }>("/rides/quote", {
         method: "POST",
-        body: JSON.stringify({ ...locations, rideType: rideOption, promoCode: promo || undefined })
+        body: quoteRequestBody(pickup, destination, rideOption, promo)
       });
       setQuote(response.data);
       setMessage("");
@@ -351,6 +348,8 @@ function App() {
         else if (["NETWORK_FAILURE", "ROUTING_NETWORK_FAILURE"].includes(error.code)) setMessage("Network failure. Check your connection and try the estimate again.");
         else setMessage(error.message);
       } else setMessage("Network failure. Check your connection and try the estimate again.");
+    } finally {
+      setQuoting(false);
     }
   }
 
@@ -414,11 +413,22 @@ function App() {
     }
     setLocating(true);
     navigator.geolocation.getCurrentPosition(
-      (position) => {
-        setPickup({ address: "Current location", latitude: position.coords.latitude, longitude: position.coords.longitude });
+      async (position) => {
+        const { latitude, longitude, accuracy } = position.coords;
+        setPickup({ address: "Finding exact address…", latitude, longitude });
+        setGpsAccuracyM(Math.round(accuracy));
         setQuote(null);
-        setLocating(false);
-        setMessage("Pickup set from your device location.");
+        try {
+          const address = await reverseGeocode(latitude, longitude, googleMapsBrowserKey);
+          setPickup({ address, latitude, longitude });
+          setMessage(`Pickup set to ${address}. GPS accuracy is about ${Math.round(accuracy)} m.`);
+        } catch {
+          const fallback = `GPS location (${latitude.toFixed(5)}, ${longitude.toFixed(5)})`;
+          setPickup({ address: fallback, latitude, longitude });
+          setMessage(`Pickup coordinates are ready, but the readable address could not be loaded. GPS accuracy is about ${Math.round(accuracy)} m; you can still request an estimate.`);
+        } finally {
+          setLocating(false);
+        }
       },
       (error) => {
         setLocating(false);
@@ -426,7 +436,7 @@ function App() {
           ? "Location permission was denied. Allow location access in your browser settings, or enter your pickup manually."
           : "Your current location could not be found. Check GPS and network access, then try again.");
       },
-      { enableHighAccuracy: true, timeout: 10_000, maximumAge: 30_000 }
+      { enableHighAccuracy: true, timeout: 15_000, maximumAge: 0 }
     );
   }
 
@@ -531,6 +541,7 @@ function App() {
         <div className="panel form">
           <PlaceSearchField label={translatedMessage(locale, "pickup")} value={pickup} onChange={(location) => { setPickup(location); setQuote(null); setMessage(""); }} />
           <button className="link-button" type="button" disabled={locating} onClick={useCurrentPickup}>{passengerMessage(locale, locating ? "findingLocation" : "useGps")}</button>
+          {gpsAccuracyM != null && <small role="status">GPS accuracy: about {gpsAccuracyM} m</small>}
           <PlaceSearchField label={translatedMessage(locale, "destination")} value={destination} onChange={(location) => { setDestination(location); setQuote(null); setMessage(""); }} />
           {favourites.length > 0 && <div className="saved-place-shortcuts" aria-label={passengerMessage(locale, "savedPlaces")}>
             {favourites.slice(0, 4).map((place) => <button key={place.id} type="button" onClick={() => selectFavourite(place, "destination")}>
@@ -572,9 +583,10 @@ function App() {
           )}
           {trackedRideId && <p className="notice" role="status">Live tracking: {trackingStatus === "live" ? "connected" : trackingStatus === "reconnecting" ? "reconnecting" : "connecting"}{etaSeconds ? ` · driver ETA ${Math.ceil(etaSeconds / 60)} min` : ""}</p>}
           <div className="toolbar">
-            <button className="action" disabled={!networkOnline || !pickup.address.trim() || !destination.address.trim()} onClick={getQuote}>{translatedMessage(locale, "getEstimate")}</button>
+            <button className="action" disabled={quoting} onClick={getQuote}>{quoting ? "Getting estimate…" : translatedMessage(locale, "getEstimate")}</button>
             {quote && <button className="action" disabled={!networkOnline || booking || Boolean(activeRide)} onClick={book}>{passengerMessage(locale, booking ? "requesting" : activeRide ? "activeRideExists" : "confirmRide")}</button>}
           </div>
+          {!quoting && estimateValidationError(networkOnline, pickup, destination) && <small className="place-search-error" role="status">{estimateValidationError(networkOnline, pickup, destination)}</small>}
           {quote && (
             <div className="estimate-card" aria-live="polite">
               <div><span className="eyebrow">{passengerMessage(locale, "estimatedTrip")}</span><h2>{money(quote.fareMinor)}</h2></div>

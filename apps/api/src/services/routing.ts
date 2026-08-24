@@ -14,6 +14,24 @@ export function buildRoutingUrl(coordinates: string, settings: { provider: "osrm
   const baseUrl = settings.apiUrl.replace(/\/$/, "");
   return settings.provider === "google" ? baseUrl : `${baseUrl}/route/v1/driving/${coordinates}?alternatives=false&steps=false&geometries=geojson&overview=full`;
 }
+export function buildGoogleRouteRequest(pickup: RouteLocation, destination: RouteLocation, apiKey: string) {
+  return {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-goog-api-key": apiKey,
+      "x-goog-fieldmask": "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline"
+    },
+    body: JSON.stringify({
+      origin: { location: { latLng: pickup } },
+      destination: { location: { latLng: destination } },
+      travelMode: "DRIVE",
+      routingPreference: "TRAFFIC_AWARE"
+    }),
+    timeoutMs: config.ROUTING_TIMEOUT_MS,
+    attempts: 2
+  };
+}
 export function decodeGooglePolyline(encoded: string): Array<[number, number]> {
   const points: Array<[number, number]> = []; let index = 0, latitude = 0, longitude = 0;
   while (index < encoded.length) {
@@ -30,7 +48,7 @@ export async function calculateRoadRoute(pickup: RouteLocation, destination: Rou
   const coordinates = `${pickup.longitude},${pickup.latitude};${destination.longitude},${destination.latitude}`;
   const url = buildRoutingUrl(coordinates, { provider: config.ROUTING_PROVIDER, apiUrl: config.ROUTING_API_URL });
   const google = config.ROUTING_PROVIDER === "google";
-  const init = google ? { method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": config.GOOGLE_MAPS_SERVER_API_KEY!, "x-goog-fieldmask": "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline" }, body: JSON.stringify({ origin: { location: { latLng: pickup } }, destination: { location: { latLng: destination } }, travelMode: "DRIVE", routingPreference: "TRAFFIC_AWARE" }), timeoutMs: config.ROUTING_TIMEOUT_MS, attempts: 2 } : { headers: { accept: "application/json", "user-agent": "LibSwiftRide/0.1 routing" }, timeoutMs: config.ROUTING_TIMEOUT_MS, attempts: 2 };
+  const init = google ? buildGoogleRouteRequest(pickup, destination, config.GOOGLE_MAPS_SERVER_API_KEY!) : { headers: { accept: "application/json", "user-agent": "LibSwiftRide/0.1 routing" }, timeoutMs: config.ROUTING_TIMEOUT_MS, attempts: 2 };
   let response: Response;
   try { response = await fetchRoute(url, init); } catch { throw new RoutingError("ROUTING_NETWORK_FAILURE", "Routing service could not be reached. Try again."); }
   if (!response.ok) { if (response.status >= 500 || response.status === 408 || response.status === 429) throw new RoutingError("ROUTING_NETWORK_FAILURE", "Routing service is temporarily unavailable. Try again."); throw new RoutingError("ROUTE_UNAVAILABLE", "No drivable route is available for those locations"); }
