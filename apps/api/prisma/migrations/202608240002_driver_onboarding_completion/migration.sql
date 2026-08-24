@@ -1,0 +1,8 @@
+ALTER TYPE "KycDocumentType" ADD VALUE IF NOT EXISTS 'VEHICLE_PHOTOS';
+
+ALTER TABLE "Driver"
+  ADD COLUMN "residentialAddress" TEXT,
+  ADD COLUMN "dateOfBirth" TIMESTAMP(3);
+
+ALTER TABLE "Vehicle"
+  ADD COLUMN "category" TEXT NOT NULL DEFAULT 'SEDAN';

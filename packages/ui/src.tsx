@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ButtonHTMLAttributes, type FormEvent,
 import { apiClient, registerWebPushDevice } from "@libswiftride/sdk";
 import "maplibre-gl/dist/maplibre-gl.css";
 import type { ThemeMode } from "./theme/index.js";
+import { resolveMapProvider } from "./map-provider.js";
 import "./styles.css";
 
 type DemoRole = "PASSENGER" | "DRIVER" | "ADMIN" | "DISPATCHER" | "FLEET_MANAGER" | "BUSINESS_MANAGER";
@@ -22,18 +23,21 @@ const environment = (import.meta as ImportMeta & { env?: Record<string, string> 
 const demoEnabled = environment?.VITE_DEMO_MODE === "true";
 const pushConfigured = Boolean(environment?.VITE_WEB_PUSH_PUBLIC_KEY?.trim());
 const apiUrl = environment?.VITE_API_URL ?? "http://localhost:4000/api/v1";
-const requestedMapProvider = environment?.VITE_MAP_PROVIDER?.trim().toLowerCase() || "preview";
-const googleMapsBrowserKey = requestedMapProvider === "google" ? environment?.VITE_GOOGLE_MAPS_BROWSER_API_KEY?.trim() : undefined;
+const { googleMapsBrowserKey } = resolveMapProvider(environment?.VITE_MAP_PROVIDER, environment?.VITE_GOOGLE_MAPS_BROWSER_API_KEY);
 let googleMapsPromise: Promise<any> | undefined;
 export function loadGoogleMaps() {
   if (!googleMapsBrowserKey) return Promise.reject(new Error("Google Maps is not configured"));
   if (googleMapsPromise) return googleMapsPromise;
   googleMapsPromise = new Promise((resolve, reject) => {
     const callback = `libSwiftRideGoogleMaps${Date.now()}`;
-    (window as any)[callback] = () => { delete (window as any)[callback]; resolve((window as any).google.maps); };
+    const previousAuthFailure = (window as any).gm_authFailure;
+    const finish = (error?: Error) => { window.clearTimeout(timeout); delete (window as any)[callback]; (window as any).gm_authFailure = previousAuthFailure; if (error) { googleMapsPromise = undefined; reject(error); } else resolve((window as any).google.maps); };
+    const timeout = window.setTimeout(() => finish(new Error("Google Maps timed out. Showing the map preview instead.")), 12_000);
+    (window as any)[callback] = () => finish();
+    (window as any).gm_authFailure = () => finish(new Error("Google Maps could not authenticate this browser domain. Showing the map preview instead."));
     const script = document.createElement("script");
     script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(googleMapsBrowserKey)}&libraries=places&v=weekly&callback=${callback}`;
-    script.async = true; script.onerror = () => reject(new Error("Google Maps failed to load")); document.head.appendChild(script);
+    script.async = true; script.onerror = () => finish(new Error("Google Maps failed to load. Showing the map preview instead.")); document.head.appendChild(script);
   });
   return googleMapsPromise;
 }
@@ -508,24 +512,28 @@ export function Map({ latitude = 6.3156, longitude = -10.8074, label = "Monrovia
   const container = useRef<HTMLDivElement | null>(null);
   const map = useRef<MapController | null>(null);
   const markers = useRef<MapMarker[]>([]);
+  const activeProvider = useRef<"google" | "preview">("preview");
   const [mapReady, setMapReady] = useState(false);
+  const [mapError, setMapError] = useState("");
 
   useEffect(() => {
     if (!container.current || map.current) return;
     let disposed = false;
     const initialize = async () => {
-      if (googleMapsBrowserKey) {
-        const googleMaps = await loadGoogleMaps();
-        if (disposed || !container.current) return;
-        const instance = new googleMaps.Map(container.current, { center: { lat: latitude, lng: longitude }, zoom: 13, mapTypeControl: false, streetViewControl: false });
-        map.current = instance as unknown as MapController;
-      } else {
+      if (googleMapsBrowserKey) try {
+          const googleMaps = await loadGoogleMaps();
+          if (disposed || !container.current) return;
+          const instance = new googleMaps.Map(container.current, { center: { lat: latitude, lng: longitude }, zoom: 13, mapTypeControl: false, streetViewControl: false });
+          map.current = instance as unknown as MapController; activeProvider.current = "google";
+        } catch (error) { setMapError((error as Error).message); }
+      if (!map.current) {
         const maplibreModule = await import("maplibre-gl");
         const maplibregl = "Map" in maplibreModule ? maplibreModule : (maplibreModule as unknown as { default: typeof maplibreModule }).default;
         if (disposed || !container.current) return;
         const instance = new maplibregl.Map({ container: container.current, style: "https://demotiles.maplibre.org/style.json", center: [longitude, latitude], zoom: 13 });
         instance.addControl(new maplibregl.NavigationControl({ showCompass: true }), "top-right");
         map.current = instance as unknown as MapController;
+        activeProvider.current = "preview";
       }
       setMapReady(true);
     };
@@ -534,7 +542,7 @@ export function Map({ latitude = 6.3156, longitude = -10.8074, label = "Monrovia
       disposed = true;
       markers.current.forEach((current) => current.remove());
       markers.current = [];
-      if (googleMapsBrowserKey) {
+      if (activeProvider.current === "google") {
         if (container.current) container.current.replaceChildren();
       } else map.current?.remove();
       map.current = null;
@@ -554,7 +562,7 @@ export function Map({ latitude = 6.3156, longitude = -10.8074, label = "Monrovia
     const render = async () => {
       if (cancelled) return;
       markers.current.forEach((current) => current.remove());
-      if (googleMapsBrowserKey) {
+      if (activeProvider.current === "google") {
         const googleMaps = await loadGoogleMaps();
         const googleMap = currentMap as any;
         markers.current = points.map((point) => {
@@ -612,6 +620,6 @@ export function Map({ latitude = 6.3156, longitude = -10.8074, label = "Monrovia
 
   return <div className="map-frame" aria-label={label}>
     <div className="app-map" ref={container} />
-    <div className="map-overlay"><span className="live-dot" /> {label}<small>{googleMapsBrowserKey ? "Google Maps" : "OpenStreetMap preview"}</small></div>
+    <div className="map-overlay"><span className="live-dot" /> {label}<small>{activeProvider.current === "google" ? "Google Maps" : "OpenStreetMap preview"}</small>{mapError && <small role="status">{mapError}</small>}</div>
   </div>;
 }

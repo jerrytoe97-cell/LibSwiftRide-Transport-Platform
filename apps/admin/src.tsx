@@ -31,7 +31,7 @@ type OperationsReport = {
 type Promotion = { id: string; code: string; description: string; active: boolean; uses: number; maxUses: number | null; expiresAt: string };
 type Passenger = { id: string; firstName: string; lastName: string; phone: string; status: string; _count: { rides: number } };
 type Review = { id: string; score: number; comment: string | null; author: { firstName: string; lastName: string }; subject: { firstName: string; lastName: string } };
-type KycCase = { id: string; driver: { user: { firstName: string; lastName: string } }; submittedAt: string; documents: Array<{ id: string; type: string; mimeType: string; sizeBytes: number; scanStatus: string }> };
+type KycCase = { id: string; status: string; driver: { residentialAddress: string | null; dateOfBirth: string | null; licenseNumber: string; nationalIdRef: string; user: { firstName: string; lastName: string }; vehicle: { make: string; model: string; year: number; color: string; plateNumber: string; category: string } | null }; submittedAt: string; documents: Array<{ id: string; type: string; mimeType: string; sizeBytes: number; scanStatus: string }> };
 type Analytics = {
   rides: { total: number; completed: number; cancelled: number; uniquePassengers: number; activeDrivers: number; averageAcceptanceSec: number | null; averageTripSec: number | null };
   revenue: { discountsMinor: number; waitingFeesMinor: number; tollsMinor: number };
@@ -77,7 +77,7 @@ function App() {
       apiClient.request<{ data: Promotion[] }>("/admin/promos"),
       apiClient.request<{ data: Passenger[] }>("/admin/passengers"),
       apiClient.request<{ data: Review[] }>("/admin/reviews?status=PENDING"),
-      apiClient.request<{ data: KycCase[] }>("/admin/kyc?status=SUBMITTED"),
+      apiClient.request<{ data: KycCase[] }>("/admin/kyc"),
       apiClient.request<{ data: Analytics }>(`/reports/analytics?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`),
       apiClient.request<{ data: AdvancedAnalytics }>(`/reports/advanced?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`),
       apiClient.request<{ data: CommissionSettings }>("/admin/settings/commission"),
@@ -100,7 +100,14 @@ function App() {
 
   async function reviewKyc(id: string, decision: "APPROVED" | "REJECTED") {
     try {
-      await apiClient.request(`/admin/kyc/${id}/review`, { method: "POST", body: JSON.stringify({ decision, ...(decision === "REJECTED" ? { rejectionCode: "DOCUMENT_REVIEW_REQUIRED", rejectionNotes: "One or more fictional staging documents require correction." } : {}) }) });
+      let rejection: { rejectedDocumentTypes: string[]; rejectionNotes: string } | undefined;
+      if (decision === "REJECTED") {
+        const type = window.prompt("Enter the document type that must be replaced (for example INSURANCE):")?.trim().toUpperCase();
+        const reason = window.prompt("Explain clearly what must be corrected:")?.trim();
+        if (!type || !reason) return;
+        rejection = { rejectedDocumentTypes: [type], rejectionNotes: reason };
+      }
+      await apiClient.request(`/admin/kyc/${id}/review`, { method: "POST", body: JSON.stringify({ decision, ...rejection }) });
       window.location.reload();
     } catch (requestError) { setError((requestError as Error).message); }
   }
@@ -231,8 +238,10 @@ function App() {
         <p>Open every restricted document before deciding. Access links expire after two minutes and every view is audited.</p>
         {kycCases.map((kyc) => <article className="kyc-review-card" key={kyc.id}>
           <div className="toolbar"><strong>{kyc.driver.user.firstName} {kyc.driver.user.lastName}</strong><small>Submitted {new Date(kyc.submittedAt).toLocaleString("en-LR")}</small></div>
+          <p>Address: {kyc.driver.residentialAddress ?? "Missing"} · DOB: {kyc.driver.dateOfBirth ? new Date(kyc.driver.dateOfBirth).toLocaleDateString("en-LR") : "Missing"}<br />Licence: {kyc.driver.licenseNumber} · National ID: {kyc.driver.nationalIdRef}</p>
+          <p>Vehicle: {kyc.driver.vehicle ? `${kyc.driver.vehicle.year} ${kyc.driver.vehicle.color} ${kyc.driver.vehicle.make} ${kyc.driver.vehicle.model} · ${kyc.driver.vehicle.plateNumber} · ${kyc.driver.vehicle.category}` : "Missing"}</p>
           <div className="kyc-review-documents">{kyc.documents.map((document) => <div className="mini-row" key={document.id}><span>{document.type.replaceAll("_", " ")} · {Math.ceil(document.sizeBytes / 1024)} KB · {document.scanStatus}</span><button className="link-button" disabled={document.scanStatus !== "CLEAN"} onClick={() => openKycDocument(document.id)}>Open securely</button></div>)}</div>
-          <div><button className="action" onClick={() => reviewKyc(kyc.id, "APPROVED")}>Approve</button> <button className="link-button" onClick={() => reviewKyc(kyc.id, "REJECTED")}>Reject</button></div>
+          <div><button className="action" disabled={!kyc.driver.vehicle || kyc.documents.some((document) => document.scanStatus !== "CLEAN")} onClick={() => reviewKyc(kyc.id, "APPROVED")}>Approve</button> <button className="link-button" onClick={() => reviewKyc(kyc.id, "REJECTED")}>Request document resubmission</button></div>
         </article>)}
         {!kycCases.length && <p>No submitted driver cases.</p>}
       </section>

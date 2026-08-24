@@ -35,8 +35,9 @@ type AvailabilityWindow = { id: string; startsAt: string; endsAt: string };
 type RideHistory = { id: string; status: string; pickupAddress: string; destinationAddress: string; driverEarningsMinor: number; completedAt: string | null };
 type ChatMessage = { id: string; senderId: string; content: string; createdAt: string };
 type Incentive = { id: string; name: string; minimumRides: number; bonusMinor: number; completedRides: number; awarded: boolean; endsAt: string };
-type KycDocumentType = "DRIVER_LICENSE" | "VEHICLE_REGISTRATION" | "INSURANCE" | "INSPECTION" | "PROFILE_PHOTO";
-type Onboarding = { id: string; onboardingStep: string; verifiedAt: string | null; status: string; kycCase: { status: string; rejectionCode: string | null; rejectionNotes: string | null; documents: Array<{ type: string; sizeBytes: number; scanStatus: string }> } | null; vehicle: { make: string; model: string; plateNumber: string; active: boolean } | null };
+type KycDocumentType = "DRIVER_LICENSE" | "NATIONAL_ID" | "VEHICLE_REGISTRATION" | "INSURANCE" | "INSPECTION" | "VEHICLE_PHOTOS" | "PROFILE_PHOTO";
+type Onboarding = { id: string; onboardingStep: string; verifiedAt: string | null; status: string; licenseNumber: string; nationalIdRef: string; residentialAddress: string | null; dateOfBirth: string | null; user: { firstName: string; lastName: string; phone: string }; kycCase: { status: string; rejectionCode: string | null; rejectionNotes: string | null; documents: Array<{ type: string; sizeBytes: number; scanStatus: string }> } | null; vehicle: { make: string; model: string; year: number; color: string; plateNumber: string; category: string; active: boolean } | null };
+type Account = { firstName: string; lastName: string; phone: string };
 type KycUploadConfig = { enabled: boolean; fictionalOnly: boolean; maxBytes: number; mimeTypes: string[] };
 
 const nextStatus: Record<string, string> = {
@@ -64,6 +65,12 @@ function App() {
   const [onboarding, setOnboarding] = useState<Onboarding | null | undefined>(undefined);
   const [licenseNumber, setLicenseNumber] = useState("");
   const [nationalIdRef, setNationalIdRef] = useState("");
+  const [account, setAccount] = useState<Account | null>(null);
+  const [firstName, setFirstName] = useState(""); const [lastName, setLastName] = useState("");
+  const [residentialAddress, setResidentialAddress] = useState(""); const [dateOfBirth, setDateOfBirth] = useState("");
+  const [vehicleMake, setVehicleMake] = useState(""); const [vehicleModel, setVehicleModel] = useState("");
+  const [vehicleYear, setVehicleYear] = useState(String(new Date().getFullYear())); const [vehicleColor, setVehicleColor] = useState("");
+  const [plateNumber, setPlateNumber] = useState(""); const [vehicleCategory, setVehicleCategory] = useState("SEDAN");
   const [offerSeconds, setOfferSeconds] = useState(60);
   const [kycUploadConfig, setKycUploadConfig] = useState<KycUploadConfig | null>(null);
   const [fictionalConfirmed, setFictionalConfirmed] = useState(false);
@@ -97,10 +104,12 @@ function App() {
 
   async function load() {
     if (!apiClient.hasSession()) return;
-    const [onboardingResponse, uploadConfigResponse] = await Promise.all([
+    const [onboardingResponse, uploadConfigResponse, accountResponse] = await Promise.all([
       apiClient.request<{ data: Onboarding | null }>("/drivers/me/onboarding"),
-      apiClient.request<{ data: KycUploadConfig }>("/drivers/kyc/uploads/config")
+      apiClient.request<{ data: KycUploadConfig }>("/drivers/kyc/uploads/config"),
+      apiClient.request<{ data: Account }>("/users/me")
     ]);
+    setAccount(accountResponse.data); setFirstName(accountResponse.data.firstName); setLastName(accountResponse.data.lastName);
     setKycUploadConfig(uploadConfigResponse.data);
     setOnboarding(onboardingResponse.data);
     if (!onboardingResponse.data) {
@@ -125,7 +134,7 @@ function App() {
 
   async function startOnboarding() {
     try {
-      await apiClient.request("/drivers/onboarding", { method: "POST", body: JSON.stringify({ licenseNumber, nationalIdRef }) });
+      await apiClient.request("/drivers/onboarding", { method: "POST", body: JSON.stringify({ firstName, lastName, residentialAddress, dateOfBirth, licenseNumber, nationalIdRef, vehicle: { make: vehicleMake, model: vehicleModel, year: Number(vehicleYear), color: vehicleColor, plateNumber, category: vehicleCategory } }) });
       setLicenseNumber("");
       setNationalIdRef("");
       await load();
@@ -291,21 +300,32 @@ function App() {
   const navigationUrl = navigationTarget
     ? `https://www.google.com/maps/dir/?api=1&origin=${coords.latitude}%2C${coords.longitude}&destination=${navigationTarget.latitude}%2C${navigationTarget.longitude}&travelmode=driving`
     : "";
+  const requiredKycDocuments: ReadonlyArray<readonly [KycDocumentType, string]> = [["DRIVER_LICENSE", "Driver license"], ["NATIONAL_ID", "National ID"], ["VEHICLE_REGISTRATION", "Vehicle registration"], ["INSURANCE", "Insurance"], ["INSPECTION", "Inspection certificate"], ["VEHICLE_PHOTOS", "Vehicle photos"], ["PROFILE_PHOTO", "Verification portrait"]];
+  const completedKycDocuments = requiredKycDocuments.filter(([type]) => onboarding?.kycCase?.documents.some((document) => document.type === type && document.scanStatus === "CLEAN")).length;
+  const verificationProgress = Math.round(((completedKycDocuments + (onboarding?.kycCase?.status === "APPROVED" ? 1 : 0)) / 8) * 100);
+  const rejectedDocumentTypes = new Set(onboarding?.kycCase?.rejectionCode?.startsWith("DOCUMENTS:") ? onboarding.kycCase.rejectionCode.slice(10).split(",") : []);
   return (
     <Shell product="Driver" demoRole="DRIVER">
+      {onboarding === undefined && <section className="panel"><h1>Loading your driver registration…</h1></section>}
       {onboarding === null && <section className="panel onboarding-panel">
-        <span className="eyebrow">Driver registration</span>
-        <h1>Build your driver profile.</h1>
-        <p>Enter the official references exactly as they appear on your documents. Verification files are handled separately through LibSwiftRide&apos;s restricted KYC process.</p>
+        <span className="eyebrow">Driver registration · steps 1 and 2</span>
+        <h1>Complete Your Driver Registration</h1>
+        <p>Complete your personal and vehicle details before uploading verification documents. Your account phone is <strong>{account?.phone ?? "loading…"}</strong>.</p>
+        <h2>1. Personal information</h2>
+        <div className="form-row"><label>First name<input value={firstName} required onChange={(event) => setFirstName(event.target.value)} /></label><label>Last name<input value={lastName} required onChange={(event) => setLastName(event.target.value)} /></label></div>
+        <div className="form-row"><label>Residential address<input value={residentialAddress} required onChange={(event) => setResidentialAddress(event.target.value)} /></label><label>Date of birth<input type="date" value={dateOfBirth} required onChange={(event) => setDateOfBirth(event.target.value)} /></label></div>
         <div className="form-row"><label>Driver licence number<input value={licenseNumber} minLength={4} required onChange={(event) => setLicenseNumber(event.target.value)} /></label><label>National ID reference<input value={nationalIdRef} minLength={4} required onChange={(event) => setNationalIdRef(event.target.value)} /></label></div>
-        <Action disabled={licenseNumber.length < 4 || nationalIdRef.length < 4} onClick={startOnboarding}>Continue to verification</Action>
+        <h2>2. Vehicle information</h2>
+        <div className="form-row"><label>Make<input value={vehicleMake} required onChange={(event) => setVehicleMake(event.target.value)} /></label><label>Model<input value={vehicleModel} required onChange={(event) => setVehicleModel(event.target.value)} /></label><label>Year<input type="number" min="1990" max={new Date().getFullYear() + 1} value={vehicleYear} required onChange={(event) => setVehicleYear(event.target.value)} /></label></div>
+        <div className="form-row"><label>Color<input value={vehicleColor} required onChange={(event) => setVehicleColor(event.target.value)} /></label><label>Plate number<input value={plateNumber} required onChange={(event) => setPlateNumber(event.target.value)} /></label><label>Category<select value={vehicleCategory} onChange={(event) => setVehicleCategory(event.target.value)}><option>SEDAN</option><option>SUV</option><option>MOTORBIKE</option><option>VAN</option></select></label></div>
+        <Action disabled={[firstName,lastName,residentialAddress,dateOfBirth,licenseNumber,nationalIdRef,vehicleMake,vehicleModel,vehicleYear,vehicleColor,plateNumber].some((value) => !value.trim()) || licenseNumber.length < 4 || nationalIdRef.length < 4} onClick={startOnboarding}>Save and continue to verification</Action>
       </section>}
       {onboarding && !onboarding.verifiedAt && <section className="panel verification-status">
         <span className="eyebrow">Driver verification</span><h2>{onboarding.kycCase?.status === "SUBMITTED" ? "Documents under review" : "Verification required"}</h2>
-        <p>Status: <strong>{onboarding.kycCase?.status ?? "DRAFT"}</strong> · Step: {onboarding.onboardingStep}</p>
+        <p>Status: <strong>{onboarding.kycCase?.status ?? "DRAFT"}</strong> · Step: {onboarding.onboardingStep} · <strong>{verificationProgress}% complete</strong></p>
         <div className="verification-checklist">
-          {([["DRIVER_LICENSE", "Driver license"], ["VEHICLE_REGISTRATION", "Vehicle registration"], ["INSURANCE", "Insurance document"], ["INSPECTION", "Vehicle photos / inspection"], ["PROFILE_PHOTO", "Profile photo"]] as const).map(([type, label]) => {
-            const complete = onboarding.kycCase?.documents.some((document) => document.type === type);
+          {requiredKycDocuments.map(([type, label]) => {
+            const complete = onboarding.kycCase?.documents.some((document) => document.type === type && document.scanStatus === "CLEAN");
             return <div key={type} className={complete ? "complete" : ""}><span>{complete ? "✓" : "○"}</span><strong>{label}</strong><small>{complete ? "Received" : "Required"}</small></div>;
           })}
           <div className={onboarding.kycCase?.status === "APPROVED" ? "complete" : ""}><span>{onboarding.kycCase?.status === "APPROVED" ? "✓" : "○"}</span><strong>Admin approval</strong><small>{onboarding.kycCase?.status === "SUBMITTED" ? "Under review" : "Pending"}</small></div>
@@ -318,26 +338,31 @@ function App() {
           {([[
             "DRIVER_LICENSE", "Driver licence", "Photograph or select a fictional driver licence.", undefined
           ], [
+            "NATIONAL_ID", "National ID", "Photograph or select the front and back in one PDF or image.", undefined
+          ], [
             "VEHICLE_REGISTRATION", "Vehicle registration", "Select a fictional registration document.", undefined
           ], [
             "INSURANCE", "Insurance document", "Select a fictional insurance document.", undefined
           ], [
-            "INSPECTION", "Vehicle photo / inspection", "Show a fictional test vehicle in good lighting.", "environment"
+            "INSPECTION", "Inspection certificate", "Select the current vehicle inspection certificate.", undefined
           ], [
-            "PROFILE_PHOTO", "Profile photo", "Use a fictional test portrait; do not upload a real person.", "user"
+            "VEHICLE_PHOTOS", "Vehicle photos", "Show the front, rear, and sides in one PDF or image.", "environment"
+          ], [
+            "PROFILE_PHOTO", "Verification portrait", "Restricted KYC portrait used only by reviewers.", "user"
           ]] as const).map(([type, label, help, capture]) => {
             const document = onboarding.kycCase?.documents.find((item) => item.type === type);
             return <label className="kyc-upload-card" key={type}>
               <strong>{label}</strong><span>{help}</span>
               <small>{document?.scanStatus === "CLEAN" ? `Security scan passed · ${Math.ceil(document.sizeBytes / 1024)} KB` : "Required · JPEG, PNG, or PDF"}</small>
-              <input type="file" accept={kycUploadConfig?.mimeTypes.join(",") ?? "image/jpeg,image/png,application/pdf"} capture={capture} disabled={!kycUploadConfig?.enabled || (kycUploadConfig.fictionalOnly && !fictionalConfirmed) || uploadingType !== null || ["SUBMITTED", "UNDER_REVIEW", "APPROVED"].includes(onboarding.kycCase?.status ?? "")} onChange={(event) => { void uploadKycDocument(type, event.target.files?.[0]); event.currentTarget.value = ""; }} />
+              <input type="file" accept={kycUploadConfig?.mimeTypes.join(",") ?? "image/jpeg,image/png,application/pdf"} capture={capture} disabled={!kycUploadConfig?.enabled || (kycUploadConfig.fictionalOnly && !fictionalConfirmed) || uploadingType !== null || ["SUBMITTED", "UNDER_REVIEW", "APPROVED"].includes(onboarding.kycCase?.status ?? "") || (onboarding.kycCase?.status === "REJECTED" && !rejectedDocumentTypes.has(type))} onChange={(event) => { void uploadKycDocument(type, event.target.files?.[0]); event.currentTarget.value = ""; }} />
               {uploadingType === type && <span role="status">Uploading and scanning…</span>}
             </label>;
           })}
         </div>
-        <Action disabled={["SUBMITTED", "UNDER_REVIEW", "APPROVED"].includes(onboarding.kycCase?.status ?? "") || uploadingType !== null || !(["DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "PROFILE_PHOTO"] as const).every((type) => onboarding.kycCase?.documents.some((document) => document.type === type && document.scanStatus === "CLEAN"))} onClick={submitKyc}>Submit for Admin review</Action>
+        <section><h3>Public passenger profile photo</h3><p>This secure photo is separate from restricted KYC documents. Passengers see it only when ride contact sharing is allowed.</p><input type="file" accept="image/jpeg,image/png,image/webp" capture="user" onChange={(event) => { void uploadProfilePhoto(event.target.files?.[0]); event.currentTarget.value = ""; }} /></section>
+        <Action disabled={["SUBMITTED", "UNDER_REVIEW", "APPROVED"].includes(onboarding.kycCase?.status ?? "") || uploadingType !== null || !(["DRIVER_LICENSE", "NATIONAL_ID", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "VEHICLE_PHOTOS", "PROFILE_PHOTO"] as const).every((type) => onboarding.kycCase?.documents.some((document) => document.type === type && document.scanStatus === "CLEAN"))} onClick={submitKyc}>Submit for Admin review</Action>
       </section>}
-      <div hidden={onboarding === null}>
+      <div hidden={!onboarding?.verifiedAt}>
       {incomingRide && <section className="incoming-ride" aria-live="assertive">
         <div><span className="eyebrow">Incoming ride request · {offerSeconds}s</span><div className="driver-details"><PrivatePhoto path={incomingRide.passenger.photoAvailable ? incomingRide.passenger.photoUrl : undefined} alt={`${incomingRide.passenger.firstName} ${incomingRide.passenger.lastName}`} /><div><h1>{incomingRide.passenger.firstName} {incomingRide.passenger.lastName}</h1><p>{incomingRide.passenger.phone}</p><a className="action contact-link" href={`tel:${incomingRide.passenger.phone}`}>Call Passenger</a></div></div><p>{incomingRide.pickupAddress} → {incomingRide.destinationAddress}</p></div>
         <div className="offer-metrics"><span><small>Ride type</small><strong>Economy</strong></span><span><small>Estimated time</small><strong>{Math.max(1, Math.round(incomingRide.estimatedDurationSec / 60))} min</strong></span><span><small>Trip distance</small><strong>{(incomingRide.estimatedDistanceM / 1000).toFixed(1)} km</strong></span><span><small>Fare</small><strong>{money(incomingRide.fareMinor)}</strong></span><span><small>Your earnings</small><strong>{money(incomingRide.driverEarningsMinor)}</strong></span><span><small>Payment</small><strong>{incomingRide.paymentMethod.replaceAll("_", " ")}</strong></span></div>

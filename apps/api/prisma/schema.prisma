@@ -106,6 +106,7 @@ enum KycDocumentType {
   INSURANCE
   INSPECTION
   PROFILE_PHOTO
+  VEHICLE_PHOTOS
 }
 
 enum FavouritePlaceType {
@@ -268,6 +269,8 @@ model Driver {
   status              DriverStatus         @default(OFFLINE)
   licenseNumber       String               @unique
   nationalIdRef       String?
+  residentialAddress  String?
+  dateOfBirth         DateTime?
   onboardingStep      String               @default("PROFILE")
   approvedById        String?
   verifiedAt          DateTime?
@@ -294,6 +297,7 @@ model Vehicle {
   year                  Int
   color                 String
   plateNumber           String    @unique
+  category              String    @default("SEDAN")
   active                Boolean   @default(true)
   inspectionExpiresAt   DateTime?
   insuranceExpiresAt    DateTime?

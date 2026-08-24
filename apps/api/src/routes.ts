@@ -23,6 +23,7 @@ import { liberianPhoneLookupCandidates, normalizeLiberianPhone, selectAuthentica
 import { allowedKycMimeTypes, createKycDownloadUrl, createKycUploadIntent, deleteKycObject, kycUploadEnabled, verifyAndScanKycObject } from "./services/kyc-storage.js";
 import { transactionalEmailContent } from "./services/transactional-email-templates.js";
 import { PROFILE_PHOTO_MAX_BYTES, canShareRideContact, profilePhotoMimeTypes, validateProfilePhoto } from "./services/profile-photo.js";
+import { canReplaceKycDocument, driverReadiness, missingKycDocumentTypes, requiredKycDocumentTypes } from "./services/driver-onboarding.js";
 
 export const api = Router();
 const asyncRoute = (handler: (req: any, res: any) => Promise<unknown>) =>
@@ -724,8 +725,9 @@ api.post("/rides/:id/transitions", authenticate, authorize("PASSENGER", "DRIVER"
 }));
 
 api.post("/drivers/rides/:id/accept", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {
-  const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub }, select: { id: true } });
+  const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub }, include: { vehicle: true, kycCase: true } });
   if (!driver) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Driver profile not found" } });
+  if (!driverReadiness(driver).ready) return res.status(422).json({ error: { code: "DRIVER_NOT_READY", message: "Complete and receive approval for driver registration before accepting rides" } });
   const accepted = await prisma.$transaction(async (tx) => {
     const claimed = await tx.ride.updateMany({
       where: { id: req.params.id, driverId: driver.id, status: "DRIVER_ASSIGNED" },
@@ -1012,9 +1014,21 @@ api.post("/notifications/:id/read", authenticate, asyncRoute(async (req, res) =>
 }));
 
 api.post("/drivers/onboarding", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {
-  const input = z.object({ licenseNumber: z.string().min(4), nationalIdRef: z.string().min(4) }).parse(req.body);
-  const driver = await prisma.driver.upsert({ where: { userId: req.user!.sub }, update: { ...input, onboardingStep: "DOCUMENTS" }, create: { userId: req.user!.sub, ...input, onboardingStep: "DOCUMENTS" } });
-  await prisma.kycCase.upsert({ where: { driverId: driver.id }, update: {}, create: { driverId: driver.id } });
+  const input = z.object({
+    firstName: z.string().trim().min(2).max(80), lastName: z.string().trim().min(2).max(80),
+    residentialAddress: z.string().trim().min(5).max(240),
+    dateOfBirth: z.coerce.date().refine((date) => date <= new Date(Date.now() - 18 * 365.2425 * 86_400_000) && date >= new Date(Date.now() - 85 * 365.2425 * 86_400_000), "Driver must be between 18 and 85 years old"),
+    licenseNumber: z.string().trim().min(4).max(80), nationalIdRef: z.string().trim().min(4).max(120),
+    vehicle: z.object({ make: z.string().trim().min(2).max(80), model: z.string().trim().min(1).max(80), year: z.number().int().min(1990).max(new Date().getUTCFullYear() + 1), color: z.string().trim().min(2).max(40), plateNumber: z.string().trim().min(3).max(30), category: z.enum(["SEDAN", "SUV", "MOTORBIKE", "VAN"]) })
+  }).parse(req.body);
+  const { firstName, lastName, vehicle, ...driverInput } = input;
+  const driver = await prisma.$transaction(async (tx) => {
+    await tx.user.update({ where: { id: req.user!.sub }, data: { firstName, lastName } });
+    const saved = await tx.driver.upsert({ where: { userId: req.user!.sub }, update: { ...driverInput, onboardingStep: "DOCUMENTS" }, create: { userId: req.user!.sub, ...driverInput, onboardingStep: "DOCUMENTS" } });
+    await tx.vehicle.upsert({ where: { driverId: saved.id }, update: { ...vehicle, active: false }, create: { driverId: saved.id, ...vehicle, active: false } });
+    await tx.kycCase.upsert({ where: { driverId: saved.id }, update: {}, create: { driverId: saved.id } });
+    return saved;
+  });
   res.json({ data: driver });
 }));
 
@@ -1026,6 +1040,11 @@ api.get("/drivers/me/onboarding", authenticate, authorize("DRIVER"), asyncRoute(
       onboardingStep: true,
       verifiedAt: true,
       status: true,
+      licenseNumber: true,
+      nationalIdRef: true,
+      residentialAddress: true,
+      dateOfBirth: true,
+      user: { select: { firstName: true, lastName: true, phone: true } },
       kycCase: {
         select: {
           id: true,
@@ -1037,13 +1056,13 @@ api.get("/drivers/me/onboarding", authenticate, authorize("DRIVER"), asyncRoute(
           documents: { select: { type: true, expiresAt: true, createdAt: true, sizeBytes: true, scanStatus: true } }
         }
       },
-      vehicle: { select: { id: true, make: true, model: true, plateNumber: true, active: true } }
+      vehicle: { select: { id: true, make: true, model: true, year: true, color: true, plateNumber: true, category: true, active: true } }
     }
   });
   res.json({ data: driver });
 }));
 
-const kycDocumentType = z.enum(["NATIONAL_ID", "DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "PROFILE_PHOTO"]);
+const kycDocumentType = z.enum(["NATIONAL_ID", "DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "VEHICLE_PHOTOS", "PROFILE_PHOTO"]);
 const kycMimeType = z.enum(allowedKycMimeTypes);
 
 api.get("/drivers/kyc/uploads/config", authenticate, authorize("DRIVER"), asyncRoute(async (_req, res) => {
@@ -1057,7 +1076,7 @@ api.post("/drivers/kyc/uploads", authenticate, authorize("DRIVER"), asyncRoute(a
   const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub } });
   if (!driver) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Complete driver onboarding first" } });
   const kycCase = await prisma.kycCase.upsert({ where: { driverId: driver.id }, update: {}, create: { driverId: driver.id } });
-  if (!["DRAFT", "REJECTED"].includes(kycCase.status)) return res.status(409).json({ error: { code: "KYC_LOCKED", message: "Documents cannot be changed during review" } });
+  if (!canReplaceKycDocument(kycCase.status, input.type, kycCase.rejectionCode)) return res.status(409).json({ error: { code: "KYC_LOCKED", message: kycCase.status === "REJECTED" ? "Only documents requested by the reviewer may be replaced" : "Documents cannot be changed during review" } });
   const intent = await createKycUploadIntent({ caseId: kycCase.id, type: input.type, mimeType: input.mimeType, sizeBytes: input.sizeBytes });
   await writeAudit({ actorId: req.user!.sub, action: "KYC_UPLOAD_AUTHORIZED", entityType: "KycCase", entityId: kycCase.id, ipAddress: req.ip, metadata: { type: input.type, mimeType: input.mimeType, sizeBytes: input.sizeBytes, fictional: config.KYC_FICTIONAL_ONLY } });
   res.status(201).json({ data: intent });
@@ -1067,7 +1086,7 @@ api.post("/drivers/kyc/uploads/complete", authenticate, authorize("DRIVER"), asy
   const input = z.object({ type: kycDocumentType, storageKey: z.string().min(20).max(300), mimeType: kycMimeType, sizeBytes: z.number().int().positive().max(config.KYC_UPLOAD_MAX_BYTES), checksum: z.string().regex(/^[a-f0-9]{64}$/i) }).parse(req.body);
   const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub }, include: { kycCase: true } });
   if (!driver?.kycCase) return res.status(404).json({ error: { code: "KYC_NOT_STARTED", message: "Complete driver onboarding first" } });
-  if (!["DRAFT", "REJECTED"].includes(driver.kycCase.status)) return res.status(409).json({ error: { code: "KYC_LOCKED", message: "Documents cannot be changed during review" } });
+  if (!canReplaceKycDocument(driver.kycCase.status, input.type, driver.kycCase.rejectionCode)) return res.status(409).json({ error: { code: "KYC_LOCKED", message: driver.kycCase.status === "REJECTED" ? "Only documents requested by the reviewer may be replaced" : "Documents cannot be changed during review" } });
   if (!input.storageKey.startsWith(`kyc/quarantine/${driver.kycCase.id}/${input.type}/`)) return res.status(403).json({ error: { code: "KYC_UPLOAD_FORBIDDEN", message: "Upload does not belong to this verification case" } });
   let verified: Awaited<ReturnType<typeof verifyAndScanKycObject>>;
   try {
@@ -1093,12 +1112,14 @@ api.post("/drivers/kyc/uploads/complete", authenticate, authorize("DRIVER"), asy
 }));
 
 api.post("/drivers/kyc/submit", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {
-  const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub }, include: { user: { select: { email: true } }, kycCase: { include: { documents: true } } } });
+  const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub }, include: { user: { select: { email: true } }, vehicle: true, kycCase: { include: { documents: true } } } });
   if (!driver?.kycCase) return res.status(422).json({ error: { code: "KYC_NOT_STARTED", message: "Upload verification documents first" } });
   if (!["DRAFT", "REJECTED"].includes(driver.kycCase.status)) return res.status(409).json({ error: { code: "KYC_LOCKED", message: "Verification has already been submitted" } });
-  const required = ["DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "PROFILE_PHOTO"];
-  const clean = new Set(driver.kycCase.documents.filter((document) => document.scanStatus === "CLEAN").map((document) => document.type));
-  if (required.some((type) => !clean.has(type as any))) return res.status(422).json({ error: { code: "KYC_DOCUMENTS_REQUIRED", message: "All five required documents must upload and pass scanning" } });
+  const profileComplete = Boolean(driver.residentialAddress && driver.dateOfBirth && driver.licenseNumber && driver.nationalIdRef);
+  const vehicleComplete = Boolean(driver.vehicle?.make && driver.vehicle.model && driver.vehicle.year && driver.vehicle.color && driver.vehicle.plateNumber && driver.vehicle.category);
+  if (!profileComplete || !vehicleComplete) return res.status(422).json({ error: { code: "ONBOARDING_INCOMPLETE", message: "Complete driver and vehicle information before submission" } });
+  const missing = missingKycDocumentTypes(driver.kycCase.documents);
+  if (missing.length) return res.status(422).json({ error: { code: "KYC_DOCUMENTS_REQUIRED", message: `Required documents are missing or not clean: ${missing.join(", ")}` } });
   const submitted = await prisma.kycCase.update({ where: { id: driver.kycCase.id }, data: { status: "SUBMITTED", submittedAt: new Date(), rejectionCode: null, rejectionNotes: null } });
   const applicationReceived = transactionalEmailContent({ template: "driver-application-received" });
   await Promise.all([
@@ -1110,24 +1131,25 @@ api.post("/drivers/kyc/submit", authenticate, authorize("DRIVER"), asyncRoute(as
 
 api.get("/admin/kyc", authenticate, authorize("ADMIN"), asyncRoute(async (req, res) => {
   const status = z.enum(["SUBMITTED", "UNDER_REVIEW", "APPROVED", "REJECTED", "EXPIRED"]).optional().parse(req.query.status);
-  const cases = await prisma.kycCase.findMany({ where: status ? { status } : {}, include: { driver: { select: { id: true, user: { select: { id: true, firstName: true, lastName: true } }, vehicle: { select: { id: true, make: true, model: true, year: true, color: true, plateNumber: true, active: true } } } }, documents: { select: { id: true, type: true, mimeType: true, sizeBytes: true, scanStatus: true, createdAt: true } }, reviewer: { select: { id: true, firstName: true, lastName: true } } }, orderBy: { submittedAt: "asc" }, take: 100 });
+  const cases = await prisma.kycCase.findMany({ where: status ? { status } : { status: { in: ["SUBMITTED", "UNDER_REVIEW"] } }, include: { driver: { select: { id: true, residentialAddress: true, dateOfBirth: true, licenseNumber: true, nationalIdRef: true, user: { select: { id: true, firstName: true, lastName: true } }, vehicle: { select: { id: true, make: true, model: true, year: true, color: true, plateNumber: true, category: true, active: true } } } }, documents: { select: { id: true, type: true, mimeType: true, sizeBytes: true, scanStatus: true, createdAt: true } }, reviewer: { select: { id: true, firstName: true, lastName: true } } }, orderBy: { submittedAt: "asc" }, take: 100 });
   res.json({ data: cases });
 }));
 
 api.post("/admin/kyc/:id/review", authenticate, authorize("ADMIN"), asyncRoute(async (req, res) => {
-  const input = z.object({ decision: z.enum(["APPROVED", "REJECTED"]), rejectionCode: z.string().max(80).optional(), rejectionNotes: z.string().max(500).optional() }).refine((value) => value.decision === "APPROVED" || Boolean(value.rejectionCode), "Rejection code is required").parse(req.body);
-  const existing = await prisma.kycCase.findUnique({ where: { id: req.params.id }, include: { driver: { include: { user: { select: { email: true } } } }, documents: { select: { type: true, scanStatus: true } } } });
+  const input = z.object({ decision: z.enum(["APPROVED", "REJECTED"]), rejectedDocumentTypes: z.array(z.enum(requiredKycDocumentTypes)).min(1).optional(), rejectionNotes: z.string().trim().min(5).max(500).optional() }).refine((value) => value.decision === "APPROVED" || Boolean(value.rejectedDocumentTypes?.length && value.rejectionNotes), "Rejected documents and a reason are required").parse(req.body);
+  const existing = await prisma.kycCase.findUnique({ where: { id: req.params.id }, include: { driver: { include: { user: { select: { email: true } }, vehicle: true } }, documents: { select: { type: true, scanStatus: true } } } });
   if (!existing || !["SUBMITTED", "UNDER_REVIEW"].includes(existing.status)) return res.status(409).json({ error: { code: "KYC_NOT_REVIEWABLE", message: "KYC case is not reviewable" } });
-  const requiredDocuments = ["DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "PROFILE_PHOTO"];
-  if (input.decision === "APPROVED" && requiredDocuments.some((type) => !existing.documents.some((document) => document.type === type && document.scanStatus === "CLEAN"))) return res.status(422).json({ error: { code: "KYC_DOCUMENTS_NOT_CLEAN", message: "All required documents must pass scanning before approval" } });
+  if (input.decision === "APPROVED" && missingKycDocumentTypes(existing.documents).length) return res.status(422).json({ error: { code: "KYC_DOCUMENTS_NOT_CLEAN", message: "All required documents must pass scanning before approval" } });
+  if (input.decision === "APPROVED" && !(existing.driver.residentialAddress && existing.driver.dateOfBirth && existing.driver.vehicle?.category)) return res.status(422).json({ error: { code: "ONBOARDING_INCOMPLETE", message: "Driver and vehicle details must be complete before approval" } });
+  const rejectionCode = input.decision === "REJECTED" ? `DOCUMENTS:${input.rejectedDocumentTypes!.join(",")}` : null;
   const result = await prisma.$transaction(async (tx) => {
-    const claimed = await tx.kycCase.updateMany({ where: { id: existing.id, status: { in: ["SUBMITTED", "UNDER_REVIEW"] } }, data: { status: input.decision, reviewerId: req.user!.sub, reviewedAt: new Date(), rejectionCode: input.rejectionCode ?? null, rejectionNotes: input.rejectionNotes ?? null } });
+    const claimed = await tx.kycCase.updateMany({ where: { id: existing.id, status: { in: ["SUBMITTED", "UNDER_REVIEW"] } }, data: { status: input.decision, reviewerId: req.user!.sub, reviewedAt: new Date(), rejectionCode, rejectionNotes: input.rejectionNotes ?? null } });
     if (claimed.count !== 1) return null;
-    await tx.driver.update({ where: { id: existing.driverId }, data: input.decision === "APPROVED" ? { verifiedAt: new Date(), approvedById: req.user!.sub, onboardingStep: "COMPLETE" } : { verifiedAt: null, onboardingStep: "DOCUMENTS" } });
+    await tx.driver.update({ where: { id: existing.driverId }, data: input.decision === "APPROVED" ? { verifiedAt: new Date(), approvedById: req.user!.sub, onboardingStep: "COMPLETE", vehicle: { update: { active: true } } } : { verifiedAt: null, onboardingStep: "DOCUMENTS", vehicle: { update: { active: false } } } });
     return tx.kycCase.findUniqueOrThrow({ where: { id: existing.id } });
   });
   if (!result) return res.status(409).json({ error: { code: "KYC_REVIEW_CONFLICT", message: "This verification was already reviewed" } });
-  await writeAudit({ actorId: req.user!.sub, action: `KYC_${input.decision}`, entityType: "KycCase", entityId: existing.id, ipAddress: req.ip, ...(input.rejectionCode ? { metadata: { rejectionCode: input.rejectionCode } } : {}) });
+  await writeAudit({ actorId: req.user!.sub, action: `KYC_${input.decision}`, entityType: "KycCase", entityId: existing.id, ipAddress: req.ip, ...(rejectionCode ? { metadata: { rejectedDocumentTypes: input.rejectedDocumentTypes } } : {}) });
   const reviewNotice = input.decision === "APPROVED"
     ? transactionalEmailContent({ template: "kyc-approved" })
     : transactionalEmailContent({ template: "kyc-rejected", ...(input.rejectionNotes ? { reason: input.rejectionNotes } : {}) });
@@ -1395,7 +1417,7 @@ api.post("/drivers/me/availability", authenticate, authorize("DRIVER"), asyncRou
   const status = z.object({ status: z.enum(["AVAILABLE", "OFFLINE"]) }).parse(req.body).status;
   const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub }, include: { vehicle: true, kycCase: true } });
   if (!driver) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Driver profile not found" } });
-  if (status === "AVAILABLE" && (!driver.verifiedAt || driver.kycCase?.status !== "APPROVED" || !driver.vehicle?.active)) return res.status(422).json({ error: { code: "DRIVER_NOT_READY", message: "Approved verification and an active vehicle are required" } });
+  if (status === "AVAILABLE" && !driverReadiness(driver).ready) return res.status(422).json({ error: { code: "DRIVER_NOT_READY", message: "Complete driver registration, vehicle details, and approved verification before going online" } });
   if (driver.status === "ON_TRIP") return res.status(409).json({ error: { code: "ACTIVE_TRIP", message: "Availability cannot change during a trip" } });
   const updated = await prisma.driver.update({ where: { id: driver.id }, data: { status } });
   res.json({ data: updated });
