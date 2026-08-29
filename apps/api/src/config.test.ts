@@ -92,6 +92,17 @@ describe("production environment safeguards", () => {
       ZOHO_SMTP_PORT: "465",
       ZOHO_SMTP_SECURE: "false"
     })).toThrow("Invalid environment");
+    expect(parseEnvironment({
+      ...production,
+      NOTIFICATION_PROVIDER: "hooks",
+      EMAIL_PROVIDER: "zoho",
+      EMAIL_FROM: "support@libswiftride.com",
+      EMAIL_REPLY_TO: "support@libswiftride.com",
+      ZOHO_SMTP_USER: "support@libswiftride.com",
+      ZOHO_SMTP_APP_PASSWORD: "Ab12Cd34Ef56Gh78",
+      ZOHO_SMTP_PORT: "465",
+      ZOHO_SMTP_SECURE: "true"
+    })).toMatchObject({ ZOHO_SMTP_PORT: 465, ZOHO_SMTP_SECURE: true });
   });
 
   it("allows sandbox KYC scanning only for fictional documents with complete private storage configuration", () => {

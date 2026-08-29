@@ -3,7 +3,10 @@ import { z } from "zod";
 
 const optionalUrl = z.preprocess((value) => value === "" ? undefined : value, z.string().url().optional());
 const optionalSecret = z.preprocess((value) => value === "" ? undefined : value, z.string().min(16).optional());
-const optionalZohoCredential = z.preprocess((value) => value === "" ? undefined : value, z.string().min(12).optional());
+const optionalZohoCredential = z.preprocess(
+  (value) => value === "" ? undefined : value,
+  z.string().regex(/^[A-Za-z0-9]{12,64}$/, "ZOHO_SMTP_APP_PASSWORD must be a 12-64 character app password without spaces").optional()
+);
 const optionalMobileMoneyNumber = z.preprocess(
   (value) => value === "" ? undefined : value,
   z.string().regex(/^0\d{9}$/, "Mobile Money numbers must be 10-digit local numbers").optional()
