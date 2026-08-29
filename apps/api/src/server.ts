@@ -34,6 +34,10 @@ const app = express();
 collectDefaultMetrics({ prefix: "libswiftride_" });
 const httpRequests = new Counter({ name: "libswiftride_http_requests_total", help: "HTTP requests", labelNames: ["method", "route", "status"] });
 const httpDuration = new Histogram({ name: "libswiftride_http_request_duration_seconds", help: "HTTP request duration", labelNames: ["method", "route", "status"], buckets: [.01, .05, .1, .25, .5, 1, 2, 5] });
+const rateLimitHandler = (_req: Request, res: Response) => res.status(429).json({
+  error: { code: "RATE_LIMIT_EXCEEDED", message: "Too many requests; please try again later" }
+});
+const jsonRateLimit = (options: Parameters<typeof rateLimit>[0]) => rateLimit({ ...options, handler: rateLimitHandler });
 app.disable("x-powered-by");
 app.use(helmet());
 app.use(cors({ origin: config.corsOrigins, credentials: true }));
@@ -47,19 +51,19 @@ app.use((req, res, next) => {
   });
   next();
 });
-app.use("/api", rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: "draft-8", legacyHeaders: false }));
-app.use("/api/v1/auth", rateLimit({ windowMs: 15 * 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
-app.use("/api/v1/auth/login", rateLimit({ windowMs: 15 * 60_000, limit: 10, standardHeaders: "draft-8", legacyHeaders: false }));
-app.use("/api/v1/auth/mfa", rateLimit({ windowMs: 15 * 60_000, limit: 10, standardHeaders: "draft-8", legacyHeaders: false }));
-app.use("/api/v1/auth/email-verification", rateLimit({ windowMs: 15 * 60_000, limit: 6, standardHeaders: "draft-8", legacyHeaders: false }));
-app.use("/api/v1/auth/password-reset", rateLimit({ windowMs: 60 * 60_000, limit: 8, standardHeaders: "draft-8", legacyHeaders: false }));
-app.use("/api/v1/rides", rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: "draft-8", legacyHeaders: false }));
-app.use("/api/v1/payments", rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
-app.use("/api/v1/deliveries", rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
-app.use("/api/v1/corporate", rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: "draft-8", legacyHeaders: false }));
-app.use("/api/v1/admin", rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: "draft-8", legacyHeaders: false }));
-app.use("/api/v1/reports", rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
-app.use("/api/v1/devices", rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api", jsonRateLimit({ windowMs: 60_000, limit: 240, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/auth", jsonRateLimit({ windowMs: 15 * 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/auth/login", jsonRateLimit({ windowMs: 15 * 60_000, limit: 10, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/auth/mfa", jsonRateLimit({ windowMs: 15 * 60_000, limit: 10, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/auth/email-verification", jsonRateLimit({ windowMs: 15 * 60_000, limit: 6, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/auth/password-reset", jsonRateLimit({ windowMs: 60 * 60_000, limit: 8, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/rides", jsonRateLimit({ windowMs: 60_000, limit: 60, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/payments", jsonRateLimit({ windowMs: 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/deliveries", jsonRateLimit({ windowMs: 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/corporate", jsonRateLimit({ windowMs: 60_000, limit: 60, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/admin", jsonRateLimit({ windowMs: 60_000, limit: 120, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/reports", jsonRateLimit({ windowMs: 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false }));
+app.use("/api/v1/devices", jsonRateLimit({ windowMs: 60_000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false }));
 app.use("/api", (_req, res, next) => {
   res.setHeader("cache-control", "no-store");
   next();

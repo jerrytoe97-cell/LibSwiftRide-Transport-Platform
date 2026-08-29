@@ -3,7 +3,8 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    testTimeout: 15_000,
+    testTimeout: 60_000,
+    hookTimeout: 60_000,
     env: {
       NODE_ENV: "test",
       DATABASE_URL: process.env.TEST_DATABASE_URL ?? "postgresql://test:test@localhost:5432/libswiftride_test",

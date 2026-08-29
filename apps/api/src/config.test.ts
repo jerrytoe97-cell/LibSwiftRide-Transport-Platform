@@ -18,6 +18,13 @@ const production = {
 } satisfies NodeJS.ProcessEnv;
 
 describe("production environment safeguards", () => {
+  it("allows an empty KYC bucket only while KYC storage is disabled", () => {
+    expect(parseEnvironment({ ...production, KYC_STORAGE_PROVIDER: "disabled", KYC_S3_BUCKET: "" }))
+      .toMatchObject({ KYC_STORAGE_PROVIDER: "disabled", KYC_S3_BUCKET: undefined });
+    expect(() => parseEnvironment({ ...production, KYC_STORAGE_PROVIDER: "s3", KYC_S3_BUCKET: "" }))
+      .toThrow("Invalid environment");
+  });
+
   it("accepts isolated HTTPS staging-style production configuration with payments disabled", () => {
     expect(parseEnvironment(production)).toMatchObject({ NODE_ENV: "production", PAYMENTS_ENABLED: false });
   });

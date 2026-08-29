@@ -1,5 +1,8 @@
-import "dotenv/config";
+import { config as loadEnvironment } from "dotenv";
+import { fileURLToPath } from "node:url";
 import { z } from "zod";
+
+loadEnvironment({ path: fileURLToPath(new URL("../../../.env", import.meta.url)), quiet: true });
 
 const optionalUrl = z.preprocess((value) => value === "" ? undefined : value, z.string().url().optional());
 const optionalSecret = z.preprocess((value) => value === "" ? undefined : value, z.string().min(16).optional());
@@ -57,7 +60,7 @@ export const environmentSchema = z.object({
   KYC_STORAGE_PROVIDER: z.enum(["disabled", "s3"]).default("disabled"),
   KYC_S3_ENDPOINT: optionalUrl,
   KYC_S3_REGION: z.string().min(1).default("auto"),
-  KYC_S3_BUCKET: z.string().min(3).optional(),
+  KYC_S3_BUCKET: z.preprocess((value) => value === "" ? undefined : value, z.string().min(3).optional()),
   KYC_S3_ACCESS_KEY_ID: optionalSecret,
   KYC_S3_SECRET_ACCESS_KEY: optionalSecret,
   KYC_S3_FORCE_PATH_STYLE: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
