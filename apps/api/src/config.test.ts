@@ -122,8 +122,8 @@ describe("production environment safeguards", () => {
       EMAIL_FROM: "support@libswiftride.com",
       EMAIL_REPLY_TO: "support@libswiftride.com",
       ZOHO_SMTP_USER: "support@libswiftride.com",
-      ZOHO_SMTP_APP_PASSWORD: "Ab12 Cd34 Ef56"
-    })).toThrow("without spaces");
+      ZOHO_SMTP_APP_PASSWORD: "TooShort"
+    })).toThrow("at least 12 characters");
     expect(() => parseEnvironment({
       ...production,
       NOTIFICATION_PROVIDER: "hooks",

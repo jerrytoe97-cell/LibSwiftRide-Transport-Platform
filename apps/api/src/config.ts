@@ -8,7 +8,7 @@ const optionalUrl = z.preprocess((value) => value === "" ? undefined : value, z.
 const optionalSecret = z.preprocess((value) => value === "" ? undefined : value, z.string().min(16).optional());
 const optionalZohoCredential = z.preprocess(
   (value) => value === "" ? undefined : value,
-  z.string().regex(/^[A-Za-z0-9]{12,64}$/, "ZOHO_SMTP_APP_PASSWORD must be a 12-64 character app password without spaces").optional()
+  z.string().min(12, "ZOHO_SMTP_APP_PASSWORD must be at least 12 characters").max(128).optional()
 );
 const optionalMobileMoneyNumber = z.preprocess(
   (value) => value === "" ? undefined : value,
