@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ApiRequestError, apiClient, message as translatedMessage, money, passengerMessage, rideStatusLabel, supportedLocales, type SupportedLocale } from "@libswiftride/sdk";
 import { Map, Shell, Stat, useNetworkStatus } from "@libswiftride/ui";
+import { getMostAccuratePosition } from "./geolocation.js";
+import { canRequestFare } from "./trip-input.js";
 import "@libswiftride/ui/styles.css";
 
 type Quote = {
@@ -58,13 +60,13 @@ type RideOption = "ECONOMY" | "PREMIUM" | "BUSINESS";
 type SosCategory = "MEDICAL" | "SECURITY" | "CRASH" | "HARASSMENT" | "OTHER";
 const defaultLocations = {
   pickup: { address: "Broad Street, Monrovia", latitude: 6.3156, longitude: -10.8074 },
-  destination: { address: "Samuel K. Doe Sports Complex, Paynesville", latitude: 6.25694, longitude: -10.70213 }
+  destination: { address: "Samuel K. Doe Sports Complex, Paynesville", latitude: 6.3058, longitude: -10.7492 }
 };
 
 const mapboxSearchToken = (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_MAPBOX_ACCESS_TOKEN?.trim();
 const greaterMonroviaPlaces: PlaceSuggestion[] = [
   { mapbox_id: "local:broad-street", name: "Broad Street", place_formatted: "Monrovia, Liberia", coordinates: [-10.8074, 6.3156] },
-  { mapbox_id: "local:skd", name: "Samuel K. Doe Sports Complex", place_formatted: "Paynesville, Liberia", coordinates: [-10.70213, 6.25694] },
+  { mapbox_id: "local:skd", name: "Samuel K. Doe Sports Complex", place_formatted: "Paynesville, Liberia", coordinates: [-10.7492, 6.3058] },
   { mapbox_id: "local:elwa", name: "ELWA Junction", place_formatted: "Paynesville, Liberia", coordinates: [-10.7031, 6.2647] },
   { mapbox_id: "local:red-light", name: "Red Light Market", place_formatted: "Paynesville, Liberia", coordinates: [-10.7057, 6.2901] },
   { mapbox_id: "local:tubman-boulevard", name: "Tubman Boulevard", place_formatted: "Sinkor, Monrovia, Liberia", coordinates: [-10.7739, 6.2871] },
@@ -194,6 +196,7 @@ function App() {
   const [destination, setDestination] = useState<Location>(defaultLocations.destination);
   const [locating, setLocating] = useState(false);
   const [booking, setBooking] = useState(false);
+  const [quoting, setQuoting] = useState(false);
   const [cancelRideId, setCancelRideId] = useState<string | null>(null);
   const [cancelReason, setCancelReason] = useState("Plans changed");
   const [cancelling, setCancelling] = useState(false);
@@ -337,16 +340,13 @@ function App() {
       setMessage("You are offline. Reconnect before requesting a fare estimate.");
       return;
     }
-    const validLocation = (location: Location) => location.address.trim().length > 0
-      && Number.isFinite(location.latitude) && location.latitude >= -90 && location.latitude <= 90
-      && Number.isFinite(location.longitude) && location.longitude >= -180 && location.longitude <= 180;
-    if (!validLocation(pickup) || !validLocation(destination)
-      || (pickup.latitude === destination.latitude && pickup.longitude === destination.longitude)) {
+    if (!canRequestFare(pickup, destination)) {
       setQuote(null);
       setMessage("Enter a valid pickup and destination at two different locations.");
       return;
     }
     try {
+      setQuoting(true);
       setQuote(null);
       const response = await apiClient.request<{ data: Quote }>("/rides/quote", {
         method: "POST",
@@ -362,7 +362,7 @@ function App() {
         else if (["NETWORK_FAILURE", "ROUTING_NETWORK_FAILURE"].includes(error.code)) setMessage("Network failure. Check your connection and try the estimate again.");
         else setMessage(error.message);
       } else setMessage("Network failure. Check your connection and try the estimate again.");
-    }
+    } finally { setQuoting(false); }
   }
 
   async function book() {
@@ -424,21 +424,19 @@ function App() {
       return;
     }
     setLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      (position) => {
+    getMostAccuratePosition(navigator.geolocation)
+      .then((position) => {
         setPickup({ address: "Current location", latitude: position.coords.latitude, longitude: position.coords.longitude });
         setQuote(null);
         setLocating(false);
-        setMessage("Pickup set from your device location.");
-      },
-      (error) => {
+        setMessage(`Pickup set from GPS (accuracy about ${Math.round(position.coords.accuracy)} m).`);
+      })
+      .catch((error: GeolocationPositionError | Error) => {
         setLocating(false);
-        setMessage(error.code === error.PERMISSION_DENIED
+        setMessage("code" in error && error.code === error.PERMISSION_DENIED
           ? "Location permission was denied. Allow location access in your browser settings, or enter your pickup manually."
           : "Your current location could not be found. Check GPS and network access, then try again.");
-      },
-      { enableHighAccuracy: true, timeout: 10_000, maximumAge: 30_000 }
-    );
+      });
   }
 
   async function loadReceipt(rideId: string) {
@@ -583,7 +581,7 @@ function App() {
           )}
           {trackedRideId && <p className="notice" role="status">Live tracking: {trackingStatus === "live" ? "connected" : trackingStatus === "reconnecting" ? "reconnecting" : "connecting"}{etaSeconds ? ` · driver ETA ${Math.ceil(etaSeconds / 60)} min` : ""}</p>}
           <div className="toolbar">
-            <button className="action" disabled={!networkOnline || !pickup.address.trim() || !destination.address.trim()} onClick={getQuote}>{translatedMessage(locale, "getEstimate")}</button>
+            <button className="action" type="button" disabled={!networkOnline || quoting || !canRequestFare(pickup, destination)} onClick={() => void getQuote()}>{quoting ? "Calculating…" : translatedMessage(locale, "getEstimate")}</button>
             {quote && <button className="action" disabled={!networkOnline || booking || Boolean(activeRide)} onClick={book}>{passengerMessage(locale, booking ? "requesting" : activeRide ? "activeRideExists" : "confirmRide")}</button>}
           </div>
           {quote && (

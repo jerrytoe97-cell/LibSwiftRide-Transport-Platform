@@ -136,6 +136,8 @@ services:
         value: https://libswiftride-dispatcher.onrender.com
       - key: VITE_BUSINESS_APP_URL
         value: https://libswiftride-business.onrender.com
+      - key: VITE_COMPANY_PHONE
+        value: "0779614995"
     routes: [{ type: rewrite, source: "/*", destination: "/index.html" }]
   - type: web
     name: libswiftride-passenger

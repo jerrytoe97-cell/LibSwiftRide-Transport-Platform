@@ -6,7 +6,10 @@ loadEnvironment({ path: fileURLToPath(new URL("../../../.env", import.meta.url))
 
 const optionalUrl = z.preprocess((value) => value === "" ? undefined : value, z.string().url().optional());
 const optionalSecret = z.preprocess((value) => value === "" ? undefined : value, z.string().min(16).optional());
-const optionalZohoCredential = z.preprocess((value) => value === "" ? undefined : value, z.string().min(12).optional());
+const optionalZohoCredential = z.preprocess(
+  (value) => value === "" ? undefined : value,
+  z.string().regex(/^[A-Za-z0-9]{12}$/, "ZOHO_SMTP_APP_PASSWORD must be the 12-character app password without spaces").optional()
+);
 const optionalMobileMoneyNumber = z.preprocess(
   (value) => value === "" ? undefined : value,
   z.string().regex(/^0\d{9}$/, "Mobile Money numbers must be 10-digit local numbers").optional()
@@ -89,11 +92,21 @@ export const environmentSchema = z.object({
     if (environment.EMAIL_PROVIDER === "resend" && (!environment.RESEND_API_KEY || !environment.EMAIL_FROM || !environment.EMAIL_REPLY_TO)) {
       context.addIssue({ code: "custom", path: ["RESEND_API_KEY"], message: "RESEND_API_KEY, EMAIL_FROM and EMAIL_REPLY_TO are required for Resend email delivery" });
     }
-    if (environment.EMAIL_PROVIDER === "zoho" && (!environment.ZOHO_SMTP_USER || !environment.ZOHO_SMTP_APP_PASSWORD || !environment.EMAIL_FROM || !environment.EMAIL_REPLY_TO)) {
-      context.addIssue({ code: "custom", path: ["ZOHO_SMTP_USER"], message: "ZOHO_SMTP_USER, ZOHO_SMTP_APP_PASSWORD, EMAIL_FROM and EMAIL_REPLY_TO are required for Zoho email delivery" });
-    }
-    if (environment.EMAIL_PROVIDER === "zoho" && environment.ZOHO_SMTP_PORT === 465 && !environment.ZOHO_SMTP_SECURE) {
-      context.addIssue({ code: "custom", path: ["ZOHO_SMTP_SECURE"], message: "Zoho SMTP port 465 requires implicit TLS" });
+    if (environment.EMAIL_PROVIDER === "zoho") {
+      for (const [field, value] of [
+        ["ZOHO_SMTP_USER", environment.ZOHO_SMTP_USER],
+        ["ZOHO_SMTP_APP_PASSWORD", environment.ZOHO_SMTP_APP_PASSWORD],
+        ["EMAIL_FROM", environment.EMAIL_FROM],
+        ["EMAIL_REPLY_TO", environment.EMAIL_REPLY_TO]
+      ] as const) {
+        if (!value) context.addIssue({ code: "custom", path: [field], message: `${field} is required for Zoho email delivery` });
+      }
+      if (environment.ZOHO_SMTP_PORT !== 465 && environment.ZOHO_SMTP_PORT !== 587) {
+        context.addIssue({ code: "custom", path: ["ZOHO_SMTP_PORT"], message: "Zoho SMTP requires port 465 (SSL) or 587 (STARTTLS)" });
+      }
+      if ((environment.ZOHO_SMTP_PORT === 465) !== environment.ZOHO_SMTP_SECURE) {
+        context.addIssue({ code: "custom", path: ["ZOHO_SMTP_SECURE"], message: "Set ZOHO_SMTP_SECURE=true for port 465 or false for port 587" });
+      }
     }
   }
   if (environment.NODE_ENV === "production" && environment.PAYMENTS_ENABLED && environment.PAYMENT_PROVIDER !== "mobile-money") {

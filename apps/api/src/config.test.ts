@@ -93,6 +93,42 @@ describe("production environment safeguards", () => {
       ZOHO_SMTP_PORT: "465",
       ZOHO_SMTP_SECURE: "false"
     })).toThrow("Invalid environment");
+    expect(parseEnvironment({
+      ...production,
+      NOTIFICATION_PROVIDER: "hooks",
+      EMAIL_PROVIDER: "zoho",
+      EMAIL_FROM: "support@libswiftride.com",
+      EMAIL_REPLY_TO: "support@libswiftride.com",
+      ZOHO_SMTP_USER: "support@libswiftride.com",
+      ZOHO_SMTP_APP_PASSWORD: "Ab12Cd34Ef56",
+      ZOHO_SMTP_PORT: "587",
+      ZOHO_SMTP_SECURE: "false"
+    })).toMatchObject({ ZOHO_SMTP_PORT: 587, ZOHO_SMTP_SECURE: false });
+    expect(() => parseEnvironment({
+      ...production,
+      NOTIFICATION_PROVIDER: "hooks",
+      EMAIL_PROVIDER: "zoho",
+      EMAIL_FROM: "support@libswiftride.com",
+      EMAIL_REPLY_TO: "support@libswiftride.com",
+      ZOHO_SMTP_USER: "support@libswiftride.com",
+      ZOHO_SMTP_APP_PASSWORD: "Ab12 Cd34 Ef56"
+    })).toThrow("without spaces");
+    expect(() => parseEnvironment({
+      ...production,
+      NOTIFICATION_PROVIDER: "hooks",
+      EMAIL_PROVIDER: "zoho",
+      EMAIL_FROM: "support@libswiftride.com",
+      EMAIL_REPLY_TO: "support@libswiftride.com",
+      ZOHO_SMTP_USER: "support@libswiftride.com",
+      ZOHO_SMTP_APP_PASSWORD: "Ab12Cd34Ef56",
+      ZOHO_SMTP_PORT: "2525",
+      ZOHO_SMTP_SECURE: "false"
+    })).toThrow("port 465 (SSL) or 587 (STARTTLS)");
+  });
+
+  it("identifies every missing Zoho Render variable", () => {
+    expect(() => parseEnvironment({ ...production, NOTIFICATION_PROVIDER: "hooks", EMAIL_PROVIDER: "zoho" }))
+      .toThrow(/ZOHO_SMTP_USER[\s\S]*ZOHO_SMTP_APP_PASSWORD[\s\S]*EMAIL_FROM[\s\S]*EMAIL_REPLY_TO/);
   });
 
   it("allows sandbox KYC scanning only for fictional documents with complete private storage configuration", () => {
