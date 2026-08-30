@@ -92,8 +92,30 @@ services:
         sync: false
       - key: KYC_STORAGE_PROVIDER
         value: disabled
+      - key: KYC_S3_ENDPOINT
+        sync: false
+      - key: KYC_S3_REGION
+        sync: false
+      - key: KYC_S3_BUCKET
+        sync: false
+      - key: KYC_S3_ACCESS_KEY_ID
+        sync: false
+      - key: KYC_S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: KYC_S3_FORCE_PATH_STYLE
+        value: "false"
+      - key: KYC_S3_SERVER_SIDE_ENCRYPTION
+        value: AES256
+      - key: KYC_S3_KMS_KEY_ID
+        sync: false
       - key: KYC_SCANNER_PROVIDER
         value: disabled
+      - key: KYC_SCANNER_URL
+        sync: false
+      - key: KYC_SCANNER_TOKEN
+        sync: false
+      - key: KYC_SCANNER_TIMEOUT_MS
+        value: "10000"
       - key: KYC_FICTIONAL_ONLY
         value: "true"
       - key: KYC_UPLOAD_MAX_BYTES

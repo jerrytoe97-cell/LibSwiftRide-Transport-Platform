@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: libswiftride-kyc-scanner
+    runtime: docker
+    # Current ClamAV databases approach 1 GiB RSS while loading; use an always-on plan with at least 2 GiB RAM.
+    plan: standard
+    region: frankfurt
+    dockerfilePath: ./apps/kyc-scanner/Dockerfile
+    dockerContext: ./apps/kyc-scanner
+    healthCheckPath: /health/ready
+    autoDeployTrigger: checksPass
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: KYC_SCANNER_TOKEN
+        sync: false
+      - key: KYC_SCANNER_ALLOWED_DOWNLOAD_HOSTS
+        sync: false
+      - key: KYC_SCANNER_MAX_BYTES
+        value: "5242880"
+      - key: KYC_SCANNER_DOWNLOAD_TIMEOUT_MS
+        value: "8000"
+      - key: CLAMD_HOST
+        value: 127.0.0.1
+      - key: CLAMD_PORT
+        value: "3310"
+      - key: CLAMD_TIMEOUT_MS
+        value: "8000"
