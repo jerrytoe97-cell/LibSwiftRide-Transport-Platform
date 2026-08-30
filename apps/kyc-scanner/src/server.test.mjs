@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { once } from "node:events";
 import net from "node:net";
 import test from "node:test";
-import { createScannerServer, downloadAndValidate, readConfiguration, scanWithClamd } from "./server.mjs";
+import { createScannerServer, downloadAndValidate, pingClamd, readConfiguration, scanWithClamd } from "./server.mjs";
 
 const token = "synthetic-test-token-value";
 const baseConfig = readConfiguration({ NODE_ENV: "test", KYC_SCANNER_TOKEN: token, KYC_SCANNER_MAX_BYTES: "1024" });
@@ -83,6 +83,16 @@ test("ClamAV INSTREAM parsing recognizes clean, infected, malformed and timeout 
   assert.equal(await verdict("stream: Eicar-Signature FOUND\n"), "infected");
   await assert.rejects(verdict("unexpected\n"));
   await assert.rejects(verdict(null, 20));
+});
+
+test("ClamAV readiness requires an exact PONG response", async () => {
+  async function ping(reply, timeoutMs = 250) {
+    const fake = net.createServer((socket) => socket.on("data", () => { if (reply !== null) socket.end(reply); }));
+    return withServer(fake, async () => pingClamd({ ...baseConfig, clamdHost: "127.0.0.1", clamdPort: fake.address().port, clamdTimeoutMs: timeoutMs }));
+  }
+  await assert.doesNotReject(ping("PONG\0"));
+  await assert.rejects(ping("unexpected\0"));
+  await assert.rejects(ping(null, 20));
 });
 
 test("production configuration requires an explicit signed-download host allowlist", () => {

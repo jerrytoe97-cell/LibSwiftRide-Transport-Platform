@@ -161,6 +161,33 @@ export function scanWithClamd(bytes, config) {
   });
 }
 
+export function pingClamd(config) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: config.clamdHost, port: config.clamdPort });
+    let reply = "";
+    let settled = false;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      if (error) reject(error); else resolve("ready");
+    };
+    socket.setTimeout(config.clamdTimeoutMs, () => finish(Object.assign(new Error("scanner timeout"), { status: 503 })));
+    socket.on("error", () => finish(Object.assign(new Error("scanner unavailable"), { status: 503 })));
+    socket.on("data", (chunk) => {
+      reply += chunk.toString("utf8");
+      if (reply.includes("\0") || reply.includes("\n")) {
+        if (reply.replaceAll("\0", "").trim() === "PONG") finish();
+        else finish(Object.assign(new Error("invalid scanner response"), { status: 503 }));
+      }
+    });
+    socket.on("end", () => {
+      if (!settled) finish(Object.assign(new Error("invalid scanner response"), { status: 503 }));
+    });
+    socket.on("connect", () => socket.write("zPING\0"));
+  });
+}
+
 function sendJson(response, status, body) {
   const bytes = Buffer.from(JSON.stringify(body));
   response.writeHead(status, { "content-type": "application/json", "content-length": bytes.length, "cache-control": "no-store" });
@@ -170,14 +197,14 @@ function sendJson(response, status, body) {
 export function createScannerServer(config, dependencies = {}) {
   const download = dependencies.download ?? ((input) => downloadAndValidate(input, config));
   const scan = dependencies.scan ?? ((bytes) => scanWithClamd(bytes, config));
-  const ping = dependencies.ping ?? (() => scanWithClamd(Buffer.from("health-check"), config));
+  const ping = dependencies.ping ?? (() => pingClamd(config));
   return http.createServer(async (request, response) => {
     response.setHeader("x-content-type-options", "nosniff");
     if (request.method === "GET" && request.url === "/health/live") return sendJson(response, 200, { status: "ok" });
     if (request.method === "GET" && request.url === "/health/ready") {
       try {
-        const verdict = await ping();
-        return verdict === "clean" ? sendJson(response, 200, { status: "ready", dependencies: { clamav: "ok" } }) : sendJson(response, 503, { status: "not_ready" });
+        await ping();
+        return sendJson(response, 200, { status: "ready", dependencies: { clamav: "ok" } });
       } catch { return sendJson(response, 503, { status: "not_ready" }); }
     }
     if (request.method !== "POST" || request.url !== "/v1/scan") return sendJson(response, 404, { error: "not_found" });
