@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { createResendEmailRequest, createZohoEmailMessage, createZohoSmtpTransport } from "./notifications.js";
+import { describe, expect, it, vi } from "vitest";
+import { createResendEmailRequest, createZohoEmailMessage, createZohoSmtpTransport, safeSmtpErrorDetails, verifySmtpTransport } from "./notifications.js";
 
 describe("Resend email delivery request", () => {
   it("uses bearer authentication, idempotency and a plain-text recipient payload", () => {
@@ -30,6 +30,12 @@ describe("Zoho SMTP email delivery", () => {
     });
   });
 
+  it("verifies the configured transporter without sending a message", async () => {
+    const verify = vi.fn().mockResolvedValue(true);
+    await verifySmtpTransport({ verify });
+    expect(verify).toHaveBeenCalledOnce();
+  });
+
   it("preserves sender, reply-to, accessible content, and notification identity", () => {
     const message = createZohoEmailMessage(
       { id: "notification-id", to: "passenger@example.test", title: "Verify your email", body: "One-time verification instructions" },
@@ -46,5 +52,18 @@ describe("Zoho SMTP email delivery", () => {
       headers: { "X-LibSwiftRide-Notification-ID": "notification-id" }
     });
     expect(message.html).toContain("LibSwiftRide");
+  });
+
+  it("logs only non-sensitive SMTP diagnostics", () => {
+    const details = safeSmtpErrorDetails(Object.assign(new Error("Authentication failed for support@libswiftride.com using secret-value"), {
+      code: "EAUTH",
+      command: "AUTH PLAIN",
+      responseCode: 535,
+      response: "535 credentials rejected"
+    }));
+    expect(details).toEqual({ errorType: "Error", smtpCode: "EAUTH", smtpCommand: "AUTH PLAIN", smtpResponseCode: 535 });
+    expect(JSON.stringify(details)).not.toContain("support@libswiftride.com");
+    expect(JSON.stringify(details)).not.toContain("secret-value");
+    expect(JSON.stringify(details)).not.toContain("credentials rejected");
   });
 });
