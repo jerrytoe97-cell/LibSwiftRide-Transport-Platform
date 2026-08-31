@@ -4,6 +4,7 @@ import { apiClient, money } from "@libswiftride/sdk";
 import { Action, Map, Shell, Stat, useNetworkStatus } from "@libswiftride/ui";
 import "@libswiftride/ui/styles.css";
 import { startLocationTracking, type LocationFailure } from "./location-runtime.js";
+import { formatKycFileSize, markKycUploadFailed, markKycUploadRunning, markKycUploadSuccessful, selectKycFile, shouldResetKycFileInput, type KycUploadState } from "./kyc-upload-state.js";
 
 type ActiveRide = {
   id: string; status: string; pickupAddress: string; pickupLatitude: number; pickupLongitude: number;
@@ -57,15 +58,26 @@ function App() {
   const [kycUploadConfig, setKycUploadConfig] = useState<KycUploadConfig | null>(null);
   const [fictionalConfirmed, setFictionalConfirmed] = useState(false);
   const [uploadingType, setUploadingType] = useState<KycDocumentType | null>(null);
+  const [kycUploadStates, setKycUploadStates] = useState<Partial<Record<KycDocumentType, KycUploadState>>>({});
   const socket = useRef<WebSocket | null>(null);
   const stopLocationTracking = useRef<(() => Promise<void>) | null>(null);
   const lastLocationSentAt = useRef(0);
 
   async function uploadKycDocument(type: KycDocumentType, file: File | undefined) {
-    if (!file || !kycUploadConfig) return;
-    if (kycUploadConfig.fictionalOnly && !fictionalConfirmed) return setMessage("Confirm that this is a fictional staging document before uploading.");
-    if (!kycUploadConfig.mimeTypes.includes(file.type)) return setMessage("Choose a JPEG, PNG, or PDF file.");
-    if (file.size > kycUploadConfig.maxBytes) return setMessage(`File must be ${Math.floor(kycUploadConfig.maxBytes / 1024 / 1024)} MB or smaller.`);
+    if (!file || !kycUploadConfig) return undefined;
+    const selected = selectKycFile(file);
+    setKycUploadStates((states) => ({ ...states, [type]: selected }));
+    const fail = (error: string) => {
+      const failed = markKycUploadFailed(selected, error);
+      setKycUploadStates((states) => ({ ...states, [type]: failed }));
+      setMessage(error);
+      return failed;
+    };
+    if (kycUploadConfig.fictionalOnly && !fictionalConfirmed) return fail("Confirm that this is a fictional staging document before uploading.");
+    if (!kycUploadConfig.mimeTypes.includes(file.type)) return fail("Choose a JPEG, PNG, or PDF file.");
+    if (file.size > kycUploadConfig.maxBytes) return fail(`File must be ${Math.floor(kycUploadConfig.maxBytes / 1024 / 1024)} MB or smaller.`);
+    const uploading = markKycUploadRunning(selected);
+    setKycUploadStates((states) => ({ ...states, [type]: uploading }));
     setUploadingType(type); setMessage(`Securely uploading ${file.name}…`);
     try {
       const checksum = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()))).map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -73,9 +85,12 @@ function App() {
       const uploaded = await fetch(intent.data.uploadUrl, { method: "PUT", headers: intent.data.requiredHeaders, body: file });
       if (!uploaded.ok) throw new Error("Private storage rejected the upload. Check bucket CORS and try again.");
       await apiClient.request("/drivers/kyc/uploads/complete", { method: "POST", body: JSON.stringify({ type, storageKey: intent.data.storageKey, mimeType: file.type, sizeBytes: file.size, checksum }) });
+      const successful = markKycUploadSuccessful(uploading);
+      setKycUploadStates((states) => ({ ...states, [type]: successful }));
       setMessage(`${file.name} uploaded and passed security scanning.`);
-      await load();
-    } catch (error) { setMessage((error as Error).message); }
+      await load().catch((error: Error) => setMessage(`${file.name} passed security scanning, but the dashboard could not refresh: ${error.message}`));
+      return successful;
+    } catch (error) { return fail(error instanceof Error ? error.message : "Document upload failed."); }
     finally { setUploadingType(null); }
   }
 
@@ -308,11 +323,19 @@ function App() {
             "PROFILE_PHOTO", "Profile photo", "Use a fictional test portrait; do not upload a real person.", "user"
           ]] as const).map(([type, label, help, capture]) => {
             const document = onboarding.kycCase?.documents.find((item) => item.type === type);
+            const uploadState = kycUploadStates[type];
             return <label className="kyc-upload-card" key={type}>
               <strong>{label}</strong><span>{help}</span>
-              <small>{document?.scanStatus === "CLEAN" ? `Security scan passed · ${Math.ceil(document.sizeBytes / 1024)} KB` : "Required · JPEG, PNG, or PDF"}</small>
-              <input type="file" accept={kycUploadConfig?.mimeTypes.join(",") ?? "image/jpeg,image/png,application/pdf"} capture={capture} disabled={!kycUploadConfig?.enabled || (kycUploadConfig.fictionalOnly && !fictionalConfirmed) || uploadingType !== null || ["SUBMITTED", "UNDER_REVIEW", "APPROVED"].includes(onboarding.kycCase?.status ?? "")} onChange={(event) => { void uploadKycDocument(type, event.target.files?.[0]); event.currentTarget.value = ""; }} />
-              {uploadingType === type && <span role="status">Uploading and scanning…</span>}
+              {!uploadState && <small>{document?.scanStatus === "CLEAN" ? `Security scan passed · ${Math.ceil(document.sizeBytes / 1024)} KB` : "Required · JPEG, PNG, or PDF"}</small>}
+              {uploadState && <small><strong>{uploadState.fileName}</strong> · {formatKycFileSize(uploadState.sizeBytes)}</small>}
+              <input type="file" accept={kycUploadConfig?.mimeTypes.join(",") ?? "image/jpeg,image/png,application/pdf"} capture={capture} disabled={!kycUploadConfig?.enabled || (kycUploadConfig.fictionalOnly && !fictionalConfirmed) || uploadingType !== null || ["SUBMITTED", "UNDER_REVIEW", "APPROVED"].includes(onboarding.kycCase?.status ?? "")} onChange={async (event) => {
+                const input = event.currentTarget;
+                const result = await uploadKycDocument(type, input.files?.[0]);
+                if (result && shouldResetKycFileInput(result)) input.value = "";
+              }} />
+              {uploadState?.status === "uploading" && <span className="notice" role="status">Uploading and scanning…</span>}
+              {uploadState?.status === "success" && <span className="notice" role="status">✓ Security scan passed</span>}
+              {uploadState?.status === "error" && <span className="notice error" role="alert">{uploadState.error}</span>}
             </label>;
           })}
         </div>
