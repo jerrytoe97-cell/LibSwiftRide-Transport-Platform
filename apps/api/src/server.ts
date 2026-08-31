@@ -14,7 +14,7 @@ import { verifyAccessToken } from "./auth.js";
 import { config } from "./config.js";
 import { prisma, redis, redisSubscriber } from "./lib.js";
 import { activateScheduledRides, updateDriverLocation } from "./services/dispatch.js";
-import { deliverPendingNotifications, queueNotification } from "./services/notifications.js";
+import { deliverPendingNotifications, queueNotification, safeSmtpErrorDetails, verifyZohoSmtpTransport } from "./services/notifications.js";
 import { logger } from "./logger.js";
 import { distanceMetres, estimateEtaSeconds } from "./services/tracking.js";
 import { queueDocumentExpiryReminders } from "./services/document-reminders.js";
@@ -203,6 +203,11 @@ server.listen(config.API_PORT, async () => {
     redis.connect(),
     redisSubscriber.connect().then(() => redisSubscriber.subscribe(RIDE_REALTIME_CHANNEL))
   ]).catch((error) => logger.error({ err: error }, "Redis startup connection failed"));
+  verifyZohoSmtpTransport()
+    .then((verified) => {
+      if (verified) logger.info({ host: config.ZOHO_SMTP_HOST, port: config.ZOHO_SMTP_PORT, secure: config.ZOHO_SMTP_SECURE }, "Zoho SMTP transporter verified");
+    })
+    .catch((error) => logger.error(safeSmtpErrorDetails(error), "Zoho SMTP transporter verification failed"));
   logger.info({ port: config.API_PORT }, "API listening");
 });
 
