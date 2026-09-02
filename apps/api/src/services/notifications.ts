@@ -2,6 +2,7 @@ import type { NotificationChannel, Prisma } from "@prisma/client";
 import nodemailer from "nodemailer";
 import { prisma } from "../lib.js";
 import { config } from "../config.js";
+import { logger } from "../logger.js";
 import { resilientFetch } from "./http-client.js";
 import { renderTransactionalEmailHtml } from "./transactional-email-templates.js";
 
@@ -63,6 +64,44 @@ export function createZohoSmtpTransport(input: { host: string; port: number; sec
   });
 }
 
+type ZohoSmtpTransport = ReturnType<typeof createZohoSmtpTransport>;
+let zohoSmtpTransport: ZohoSmtpTransport | null = null;
+
+function configuredZohoSmtpTransport() {
+  if (!config.ZOHO_SMTP_USER || !config.ZOHO_SMTP_APP_PASSWORD) return null;
+  zohoSmtpTransport ??= createZohoSmtpTransport({
+    host: config.ZOHO_SMTP_HOST,
+    port: config.ZOHO_SMTP_PORT,
+    secure: config.ZOHO_SMTP_SECURE,
+    user: config.ZOHO_SMTP_USER,
+    appPassword: config.ZOHO_SMTP_APP_PASSWORD
+  });
+  return zohoSmtpTransport;
+}
+
+export function safeSmtpErrorDetails(error: unknown) {
+  if (!error || typeof error !== "object") return { errorType: "unknown" };
+  const smtpError = error as { name?: unknown; code?: unknown; command?: unknown; responseCode?: unknown };
+  return {
+    errorType: typeof smtpError.name === "string" ? smtpError.name : "unknown",
+    ...(typeof smtpError.code === "string" ? { smtpCode: smtpError.code } : {}),
+    ...(typeof smtpError.command === "string" ? { smtpCommand: smtpError.command } : {}),
+    ...(typeof smtpError.responseCode === "number" ? { smtpResponseCode: smtpError.responseCode } : {})
+  };
+}
+
+export async function verifySmtpTransport(transport: Pick<ZohoSmtpTransport, "verify">) {
+  await transport.verify();
+}
+
+export async function verifyZohoSmtpTransport() {
+  if (config.NOTIFICATION_PROVIDER !== "hooks" || config.EMAIL_PROVIDER !== "zoho") return false;
+  const transport = configuredZohoSmtpTransport();
+  if (!transport) throw new Error("Zoho SMTP credentials are not configured");
+  await verifySmtpTransport(transport);
+  return true;
+}
+
 export function createZohoEmailMessage(input: { id: string; to: string; title: string; body: string }, from: string, replyTo: string) {
   return {
     from: `LibSwiftRide Support <${from}>`,
@@ -89,9 +128,10 @@ export async function deliverPendingNotifications(limit = 25) {
     const resend = notification.channel === "EMAIL" && config.EMAIL_PROVIDER === "resend" && notification.user.email && config.RESEND_API_KEY && config.EMAIL_FROM && config.EMAIL_REPLY_TO
       ? createResendEmailRequest({ id: notification.id, to: notification.user.email, title: notification.title, body: notification.body }, config.RESEND_API_KEY, config.EMAIL_FROM, config.EMAIL_REPLY_TO)
       : null;
-    const zoho = notification.channel === "EMAIL" && config.EMAIL_PROVIDER === "zoho" && notification.user.email && config.ZOHO_SMTP_USER && config.ZOHO_SMTP_APP_PASSWORD && config.EMAIL_FROM && config.EMAIL_REPLY_TO
+    const zohoTransport = notification.channel === "EMAIL" && config.EMAIL_PROVIDER === "zoho" ? configuredZohoSmtpTransport() : null;
+    const zoho = zohoTransport && notification.user.email && config.EMAIL_FROM && config.EMAIL_REPLY_TO
       ? {
-          transport: createZohoSmtpTransport({ host: config.ZOHO_SMTP_HOST, port: config.ZOHO_SMTP_PORT, secure: config.ZOHO_SMTP_SECURE, user: config.ZOHO_SMTP_USER, appPassword: config.ZOHO_SMTP_APP_PASSWORD }),
+          transport: zohoTransport,
           message: createZohoEmailMessage({ id: notification.id, to: notification.user.email, title: notification.title, body: notification.body }, config.EMAIL_FROM, config.EMAIL_REPLY_TO)
         }
       : null;
@@ -110,8 +150,15 @@ export async function deliverPendingNotifications(limit = 25) {
       });
       if (!response.ok) throw new Error(`Delivery returned ${response.status}`);
       await prisma.notification.update({ where: { id: notification.id }, data: { status: "SENT", sentAt: new Date(), ...(notification.template === "password-reset" ? { body: "Sensitive password-reset instructions were delivered and removed from the queue." } : {}) } });
-    } catch {
+    } catch (error) {
       const attemptCount = notification.attemptCount + 1;
+      logger.warn({
+        notificationId: notification.id,
+        channel: notification.channel,
+        provider: zoho ? "zoho" : resend ? "resend" : "hook",
+        attemptCount,
+        ...(zoho ? safeSmtpErrorDetails(error) : { errorType: error instanceof Error ? error.name : "unknown" })
+      }, "notification delivery failed");
       await prisma.notification.update({ where: { id: notification.id }, data: { status: "FAILED", attemptCount: { increment: 1 }, nextAttemptAt: attemptCount < 5 ? new Date(Date.now() + Math.min(15 * 60_000, 2 ** attemptCount * 30_000)) : null } });
     }
   }
