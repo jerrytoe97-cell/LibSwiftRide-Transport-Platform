@@ -1,8 +1,11 @@
 import { createHash, randomBytes } from "node:crypto";
 import { Router } from "express";
+import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import { authenticate, authorize, hashPassword, issueTokens, revokeRefreshToken, rotateRefreshToken, verifyPassword } from "./auth.js";
 import { config } from "./config.js";
+import { addressQuery, gpsQuery, geocode, GeocodingError } from "./services/geocoding.js";
+import { economyTariff, effectiveSurgeMultiplier, tariffForBookedRide } from "./pricing-config.js";
 import { COMPANY_SHARE_BPS, DRIVER_SHARE_BPS, calculateSplit, prisma, redis } from "./lib.js";
 import { writeAudit } from "./services/audit.js";
 import { matchDriver } from "./services/dispatch.js";
@@ -365,13 +368,35 @@ async function ratingSummary(subjectId: string) {
   return { average: rating._avg?.score ?? null, count: rating._count };
 }
 const mobileMoneyMethod = z.enum(["ORANGE_MONEY", "MTN_MOMO"]);
+const addressLookupLimit = rateLimit({ windowMs: 60_000, limit: 60, keyGenerator: (req) => req.user!.sub,
+  handler: (_req, res) => res.status(429).json({ error: { code: "ADDRESS_SEARCH_RATE_LIMIT", message: "Please wait before searching again." } }) });
+// POST keeps searches and precise GPS coordinates out of request URLs/access logs.
+api.post("/locations/search", authenticate, authorize("PASSENGER"), addressLookupLimit, asyncRoute(async (req, res) => {
+  const input = z.object({ query: addressQuery }).parse(req.body);
+  res.setHeader("cache-control", "private, no-store");
+  try { res.json({ data: await geocode(input) }); }
+  catch (error) {
+    if (!(error instanceof GeocodingError)) throw error;
+    res.status(503).json({ error: { code: "GEOCODING_UNAVAILABLE", message: error.message } });
+  }
+}));
+api.post("/locations/reverse", authenticate, authorize("PASSENGER"), addressLookupLimit, asyncRoute(async (req, res) => {
+  const input = gpsQuery.parse(req.body);
+  res.setHeader("cache-control", "private, no-store");
+  try { res.json({ data: (await geocode(input))[0] ?? null }); }
+  catch (error) {
+    if (!(error instanceof GeocodingError)) throw error;
+    res.status(503).json({ error: { code: "GEOCODING_UNAVAILABLE", message: error.message } });
+  }
+}));
 async function currentDemandMultiplier(pickup?: { latitude: number; longitude: number }) {
+  if (!config.SURGE_PRICING_ENABLED) return economyTariff.defaultMultiplier;
   const [searchingRides, availableDrivers, zones] = await Promise.all([
     prisma.ride.count({ where: { status: "SEARCHING" } }),
     prisma.driver.count({ where: { status: "AVAILABLE", verifiedAt: { not: null } } }),
     pickup ? prisma.geofenceZone.findMany({ where: { active: true }, select: { centerLatitude: true, centerLongitude: true, radiusM: true, multiplierBps: true } }) : Promise.resolve([])
   ]);
-  return Math.max(demandMultiplierFor(searchingRides, availableDrivers), pickup ? zoneMultiplierFor(pickup, zones.map((zone) => ({ ...zone, centerLatitude: Number(zone.centerLatitude), centerLongitude: Number(zone.centerLongitude) }))) : 1);
+  return effectiveSurgeMultiplier(config.SURGE_PRICING_ENABLED, demandMultiplierFor(searchingRides, availableDrivers), pickup ? zoneMultiplierFor(pickup, zones.map((zone) => ({ ...zone, centerLatitude: Number(zone.centerLatitude), centerLongitude: Number(zone.centerLongitude) }))) : 1);
 }
 
 api.get("/payments/mobile-money/:method/display", authenticate, authorize("PASSENGER"), asyncRoute(async (req, res) => {
@@ -624,7 +649,7 @@ api.post("/rides/:id/transitions", authenticate, authorize("PASSENGER", "DRIVER"
       demandMultiplier: ride.dynamicMultiplierBps / 10_000,
       waitingTimeSec: input.waitingTimeSec ?? ride.waitingTimeSec, tollMinor: input.tollMinor ?? ride.tollMinor,
       ...(ride.promoCode ? { promo: ride.promoCode } : {})
-    });
+    }, tariffForBookedRide(ride.baseFareMinor));
     return persistedPricing;
   })() : null;
   if (status === "COMPLETED" && ride.paymentMethod !== "CASH" && ride.payment?.amountMinor !== finalPricing!.fareMinor) {

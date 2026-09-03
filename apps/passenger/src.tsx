@@ -3,10 +3,12 @@ import { createRoot } from "react-dom/client";
 import { ApiRequestError, apiClient, message as translatedMessage, money, passengerMessage, rideStatusLabel, supportedLocales, type SupportedLocale } from "@libswiftride/sdk";
 import { Map, Shell, Stat, useNetworkStatus } from "@libswiftride/ui";
 import { getMostAccuratePosition } from "./geolocation.js";
-import { canRequestFare } from "./trip-input.js";
+import { canRequestFare, canConfirmBooking, isValidBookingQuote, type PassengerProfile } from "./trip-input.js";
+import { reverseGeocode, searchAddresses } from "./reverse-geocoding.js";
 import "@libswiftride/ui/styles.css";
 
 type Quote = {
+  currency: string;
   fareMinor: number;
   subtotalMinor: number;
   discountMinor: number;
@@ -63,7 +65,6 @@ const defaultLocations = {
   destination: { address: "Samuel K. Doe Sports Complex, Paynesville", latitude: 6.3058, longitude: -10.7492 }
 };
 
-const mapboxSearchToken = (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_MAPBOX_ACCESS_TOKEN?.trim();
 const greaterMonroviaPlaces: PlaceSuggestion[] = [
   { mapbox_id: "local:broad-street", name: "Broad Street", place_formatted: "Monrovia, Liberia", coordinates: [-10.8074, 6.3156] },
   { mapbox_id: "local:skd", name: "Samuel K. Doe Sports Complex", place_formatted: "Paynesville, Liberia", coordinates: [-10.7492, 6.3058] },
@@ -79,41 +80,28 @@ function PlaceSearchField({ label, value, onChange }: { label: string; value: Lo
   const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState("");
-  const sessionToken = useRef(crypto.randomUUID());
 
   useEffect(() => {
     const query = value.address.trim();
     if (query.length < 3 || Number.isFinite(value.latitude)) {
       setSuggestions([]);
       setSearching(false);
+      setSearchError("");
       return;
     }
     const controller = new AbortController();
     const timer = window.setTimeout(async () => {
       const normalizedQuery = query.toLocaleLowerCase();
-      const localSuggestions = greaterMonroviaPlaces.filter((place) => `${place.name} ${place.place_formatted ?? ""}`.toLocaleLowerCase().includes(normalizedQuery));
+      const localSuggestions = greaterMonroviaPlaces.filter((place) => `${place.mapbox_id} ${place.name} ${place.place_formatted ?? ""}`.toLocaleLowerCase().includes(normalizedQuery));
       setSuggestions(localSuggestions);
-      if (!mapboxSearchToken) { setSearching(false); return; }
       setSearching(true);
       setSearchError("");
       try {
-        const parameters = new URLSearchParams({
-          q: query,
-          access_token: mapboxSearchToken,
-          session_token: sessionToken.current,
-          country: "LR",
-          language: "en",
-          limit: "6",
-          proximity: "-10.78,6.30",
-          bbox: "-10.95,6.18,-10.55,6.55"
-        });
-        const response = await fetch(`https://api.mapbox.com/search/searchbox/v1/suggest?${parameters}`, { signal: controller.signal });
-        if (!response.ok) throw new Error("Search unavailable");
-        const result = await response.json() as { suggestions?: PlaceSuggestion[] };
-        const remoteSuggestions = result.suggestions ?? [];
-        setSuggestions([...localSuggestions, ...remoteSuggestions.filter((remote) => !localSuggestions.some((local) => local.name.toLocaleLowerCase() === remote.name.toLocaleLowerCase()))].slice(0, 6));
+        const places = await searchAddresses(query, AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]));
+        const remoteSuggestions: PlaceSuggestion[] = places.map((place) => ({ mapbox_id: place.id, name: place.address, coordinates: [place.longitude, place.latitude] }));
+        if (!controller.signal.aborted) setSuggestions([...localSuggestions, ...remoteSuggestions.filter((remote) => !localSuggestions.some((local) => local.name.toLocaleLowerCase() === remote.name.toLocaleLowerCase()))].slice(0, 6));
       } catch (error) {
-        if ((error as Error).name !== "AbortError" && localSuggestions.length === 0) setSearchError("Location search is temporarily unavailable.");
+        if (!controller.signal.aborted && (error as Error).name !== "AbortError") setSearchError("Full address lookup is unavailable. Search a supported landmark (ELWA, Broad Street or SKD), or use a saved place.");
       } finally {
         if (!controller.signal.aborted) setSearching(false);
       }
@@ -121,34 +109,14 @@ function PlaceSearchField({ label, value, onChange }: { label: string; value: Lo
     return () => { window.clearTimeout(timer); controller.abort(); };
   }, [value.address, value.latitude]);
 
-  async function selectSuggestion(suggestion: PlaceSuggestion) {
+  function selectSuggestion(suggestion: PlaceSuggestion) {
     if (suggestion.coordinates) {
       onChange({ address: [suggestion.name, suggestion.place_formatted].filter(Boolean).join(", "), longitude: suggestion.coordinates[0], latitude: suggestion.coordinates[1] });
       setSuggestions([]);
-      sessionToken.current = crypto.randomUUID();
+      setSearchError("");
       return;
     }
-    if (!mapboxSearchToken) return;
-    setSearching(true);
-    setSearchError("");
-    try {
-      const parameters = new URLSearchParams({ access_token: mapboxSearchToken, session_token: sessionToken.current, language: "en" });
-      const response = await fetch(`https://api.mapbox.com/search/searchbox/v1/retrieve/${encodeURIComponent(suggestion.mapbox_id)}?${parameters}`);
-      if (!response.ok) throw new Error("Location details unavailable");
-      const result = await response.json() as { features?: Array<{ geometry?: { coordinates?: [number, number] }; properties?: { name?: string; full_address?: string; place_formatted?: string } }> };
-      const feature = result.features?.[0];
-      const coordinates = feature?.geometry?.coordinates;
-      if (!coordinates || !coordinates.every(Number.isFinite)) throw new Error("Location has no coordinates");
-      const properties = feature?.properties;
-      const address = properties?.full_address ?? [properties?.name ?? suggestion.name, properties?.place_formatted ?? suggestion.place_formatted].filter(Boolean).join(", ");
-      onChange({ address, longitude: coordinates[0], latitude: coordinates[1] });
-      setSuggestions([]);
-      sessionToken.current = crypto.randomUUID();
-    } catch {
-      setSearchError("That location could not be selected. Try another result.");
-    } finally {
-      setSearching(false);
-    }
+    setSearchError("That location could not be selected. Try another result.");
   }
 
   return <div className="place-search">
@@ -160,13 +128,15 @@ function PlaceSearchField({ label, value, onChange }: { label: string; value: Lo
         <strong>{suggestion.name}</strong><small>{suggestion.place_formatted ?? suggestion.full_address ?? "Liberia"}</small>
       </button>)}
     </div>}
-    {!mapboxSearchToken && <small>Address search is not configured. Use a saved place or GPS pickup.</small>}
+    <small>Choose an address or landmark from the suggestions to confirm its map position.</small>
   </div>;
 }
 
 function App() {
   const networkOnline = useNetworkStatus();
-  const [quote, setQuote] = useState<Quote | null>(null);
+  const [quotedResult, setQuote] = useState<Quote | null>(null);
+  const [quotedInput, setQuotedInput] = useState("");
+  const [passenger, setPassenger] = useState<PassengerProfile | null>(null);
   const [message, setMessage] = useState("");
   const [promo, setPromo] = useState("");
   const [activePromotions, setActivePromotions] = useState<ActivePromotion[]>([]);
@@ -207,6 +177,28 @@ function App() {
   const [activeRide, setActiveRide] = useState<Ride | null>(null);
   const [rideOption, setRideOption] = useState<RideOption>("ECONOMY");
   const locations = { pickup, destination };
+  const bookingInput = JSON.stringify({ pickup, destination, rideOption, promo, scheduledFor, paymentMethod });
+  const currentInput = useRef(bookingInput);
+  currentInput.current = bookingInput;
+  const quote = quotedInput === bookingInput ? quotedResult : null;
+  const bookingValid = canConfirmBooking(pickup, destination, quote, passenger, scheduledFor);
+
+  useEffect(() => {
+    let generation = 0;
+    const refresh = () => {
+      const request = ++generation;
+      setPassenger(null);
+      setQuote(null);
+      if (!apiClient.hasSession()) return;
+      void apiClient.request<{ data: PassengerProfile }>("/users/me")
+        .then(({ data }) => { if (request === generation) setPassenger(data); })
+        .catch(() => { if (request === generation) setMessage("Passenger details could not be verified. Sign in again before booking."); });
+    };
+    refresh();
+    window.addEventListener("lsr-session-changed", refresh);
+    window.addEventListener("focus", refresh);
+    return () => { ++generation; window.removeEventListener("lsr-session-changed", refresh); window.removeEventListener("focus", refresh); };
+  }, []);
 
   async function loadDashboard() {
     if (!apiClient.hasSession()) return;
@@ -336,6 +328,7 @@ function App() {
   }, [paymentMethod]);
 
   async function getQuote() {
+    const requestedInput = bookingInput;
     if (!networkOnline) {
       setMessage("You are offline. Reconnect before requesting a fare estimate.");
       return;
@@ -352,9 +345,13 @@ function App() {
         method: "POST",
         body: JSON.stringify({ ...locations, rideType: rideOption, promoCode: promo || undefined })
       });
+      if (currentInput.current !== requestedInput) return;
+      if (!isValidBookingQuote(response.data)) throw new ApiRequestError("INVALID_QUOTE", "The API returned an invalid route or fare. Please retry.");
+      setQuotedInput(requestedInput);
       setQuote(response.data);
       setMessage("");
     } catch (error) {
+      if (currentInput.current !== requestedInput) return;
       setQuote(null);
       if (error instanceof ApiRequestError) {
         if (error.code === "INVALID_LOCATION") setMessage("Enter a valid pickup and destination at two different locations.");
@@ -366,6 +363,11 @@ function App() {
   }
 
   async function book() {
+    if (booking || quoting || locating || activeRide || !apiClient.hasSession()
+      || !canConfirmBooking(pickup, destination, quote, passenger, scheduledFor)) {
+      setMessage("Select pickup and destination, calculate a valid route and fare, and complete your passenger account before confirming. Scheduled rides must be 15 minutes to 30 days ahead.");
+      return;
+    }
     if (!networkOnline) {
       setMessage("You are offline. Reconnect before confirming your ride.");
       return;
@@ -424,18 +426,24 @@ function App() {
       return;
     }
     setLocating(true);
+    setQuote(null);
+    const pickupAtRequest = pickup;
     getMostAccuratePosition(navigator.geolocation)
-      .then((position) => {
-        setPickup({ address: "Current location", latitude: position.coords.latitude, longitude: position.coords.longitude });
+      .then(async (position) => {
+        let address = `GPS pickup (${position.coords.latitude.toFixed(5)}, ${position.coords.longitude.toFixed(5)})`;
+        let lookupWarning = "";
+        try { address = await reverseGeocode(position.coords.latitude, position.coords.longitude); }
+        catch { lookupWarning = " Address lookup is unavailable; GPS coordinates are retained. Verify the map pin or select a nearby landmark manually."; }
+        setPickup((current) => current === pickupAtRequest ? { address, latitude: position.coords.latitude, longitude: position.coords.longitude } : current);
         setQuote(null);
         setLocating(false);
-        setMessage(`Pickup set from GPS (accuracy about ${Math.round(position.coords.accuracy)} m).`);
+        setMessage(`GPS accuracy about ${Math.round(position.coords.accuracy)} m. Check your pickup pin before booking.${lookupWarning}`);
       })
       .catch((error: GeolocationPositionError | Error) => {
         setLocating(false);
         setMessage("code" in error && error.code === error.PERMISSION_DENIED
           ? "Location permission was denied. Allow location access in your browser settings, or enter your pickup manually."
-          : "Your current location could not be found. Check GPS and network access, then try again.");
+          : error instanceof Error ? error.message : "No accurate GPS position was found. Retry outdoors or enter your pickup manually.");
       });
   }
 
@@ -582,13 +590,13 @@ function App() {
           {trackedRideId && <p className="notice" role="status">Live tracking: {trackingStatus === "live" ? "connected" : trackingStatus === "reconnecting" ? "reconnecting" : "connecting"}{etaSeconds ? ` · driver ETA ${Math.ceil(etaSeconds / 60)} min` : ""}</p>}
           <div className="toolbar">
             <button className="action" type="button" disabled={!networkOnline || quoting || !canRequestFare(pickup, destination)} onClick={() => void getQuote()}>{quoting ? "Calculating…" : translatedMessage(locale, "getEstimate")}</button>
-            {quote && <button className="action" disabled={!networkOnline || booking || Boolean(activeRide)} onClick={book}>{passengerMessage(locale, booking ? "requesting" : activeRide ? "activeRideExists" : "confirmRide")}</button>}
+            <button className="action" disabled={!networkOnline || booking || quoting || locating || Boolean(activeRide) || !bookingValid} onClick={book}>{passengerMessage(locale, booking ? "requesting" : activeRide ? "activeRideExists" : "confirmRide")}</button>
           </div>
           {quote && (
             <div className="estimate-card" aria-live="polite">
-              <div><span className="eyebrow">{passengerMessage(locale, "estimatedTrip")}</span><h2>{money(quote.fareMinor)}</h2></div>
+              <div><span className="eyebrow">{passengerMessage(locale, "estimatedTrip")}</span><h2>{money(quote.fareMinor, quote.currency, locale)}</h2></div>
               <div className="estimate-details">
-                <Stat label={passengerMessage(locale, "fare")} value={money(quote.fareMinor)} />
+                <Stat label={passengerMessage(locale, "fare")} value={money(quote.fareMinor, quote.currency, locale)} />
                 <Stat label={passengerMessage(locale, "distance")} value={`${(quote.estimatedDistanceM / 1_000).toFixed(1)} km`} />
                 <Stat label={passengerMessage(locale, "tripDuration")} value={`${Math.max(1, Math.round(quote.estimatedDurationSec / 60))} min`} />
                 <Stat label={passengerMessage(locale, "rideType")} value={quote.rideType === "ECONOMY" ? passengerMessage(locale, "economy") : quote.rideType} detail={quote.discountMinor ? `Discount ${money(quote.discountMinor)}` : "Server-calculated estimate"} />

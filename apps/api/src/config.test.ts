@@ -18,6 +18,16 @@ const production = {
 } satisfies NodeJS.ProcessEnv;
 
 describe("production environment safeguards", () => {
+  it("requires explicit surge activation", () => {
+    expect(parseEnvironment(production).SURGE_PRICING_ENABLED).toBe(false);
+    expect(parseEnvironment({ ...production, SURGE_PRICING_ENABLED: "true" }).SURGE_PRICING_ENABLED).toBe(true);
+    expect(() => parseEnvironment({ ...production, SURGE_PRICING_ENABLED: "yes" })).toThrow();
+  });
+  it("keeps geocoding disabled until a server credential is configured", () => {
+    expect(parseEnvironment(production).GEOCODING_ENABLED).toBe(false);
+    expect(() => parseEnvironment({ ...production, GEOCODING_ENABLED: "true" })).toThrow("GEOCODING_API_TOKEN");
+    expect(parseEnvironment({ ...production, GEOCODING_ENABLED: "true", GEOCODING_API_TOKEN: "synthetic-geocoding-test-key" }).GEOCODING_ENABLED).toBe(true);
+  });
   it("allows an empty KYC bucket only while KYC storage is disabled", () => {
     expect(parseEnvironment({ ...production, KYC_STORAGE_PROVIDER: "disabled", KYC_S3_BUCKET: "" }))
       .toMatchObject({ KYC_STORAGE_PROVIDER: "disabled", KYC_S3_BUCKET: undefined });

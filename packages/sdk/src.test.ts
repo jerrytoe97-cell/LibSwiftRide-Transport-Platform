@@ -5,6 +5,11 @@ describe("SDK", () => {
   afterEach(() => vi.unstubAllGlobals());
   it("formats Liberian dollar minor units", () => {
     expect(money(12_500)).toContain("125");
+    expect(money(78_000)).toMatch(/^LRD\s780$/);
+    expect(money(77_700)).toMatch(/^LRD\s777$/);
+    expect(money(887_553)).toMatch(/LRD\s*8,875\.53/);
+    expect(money(12_500, "USD")).toMatch(/USD\s*125\.00/);
+    expect(money(12_500, "LRD", "fr")).toContain("LRD");
   });
   it("starts unauthenticated outside a browser", () => {
     expect(new LibSwiftRideClient().hasSession()).toBe(false);

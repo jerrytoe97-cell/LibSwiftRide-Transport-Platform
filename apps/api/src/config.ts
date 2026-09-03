@@ -22,6 +22,9 @@ export const environmentSchema = z.object({
   ROUTING_PROVIDER: z.enum(["osrm", "mapbox"]).default("osrm"),
   ROUTING_API_URL: z.string().url().default("https://router.project-osrm.org"),
   MAPBOX_ROUTING_TOKEN: optionalSecret,
+  GEOCODING_API_TOKEN: optionalSecret,
+  GEOCODING_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
+  SURGE_PRICING_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   ROUTING_TIMEOUT_MS: z.coerce.number().int().min(500).max(30_000).default(8_000),
   ROUTE_POINT_RETENTION_DAYS: z.coerce.number().int().min(1).max(365).default(30),
   API_PORT: z.coerce.number().int().positive().default(4000),
@@ -76,6 +79,9 @@ export const environmentSchema = z.object({
   KYC_FICTIONAL_ONLY: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
   KYC_UPLOAD_MAX_BYTES: z.coerce.number().int().min(1024).max(10 * 1024 * 1024).default(5 * 1024 * 1024)
 }).superRefine((environment, context) => {
+  if (environment.GEOCODING_ENABLED && !environment.GEOCODING_API_TOKEN) {
+    context.addIssue({ code: "custom", path: ["GEOCODING_API_TOKEN"], message: "GEOCODING_API_TOKEN is required when geocoding is enabled" });
+  }
   if (environment.NODE_ENV === "production" && environment.DEMO_MODE) {
     context.addIssue({ code: "custom", path: ["DEMO_MODE"], message: "Demo mode is forbidden in production" });
   }

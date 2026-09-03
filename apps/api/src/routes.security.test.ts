@@ -44,6 +44,8 @@ describe("API authorization contract", () => {
 
   it.each([
     ["POST", "/rides", ["PASSENGER"]],
+    ["POST", "/locations/search", ["PASSENGER"]],
+    ["POST", "/locations/reverse", ["PASSENGER"]],
     ["POST", "/drivers/rides/:id/accept", ["DRIVER"]],
     ["POST", "/drivers/rides/:id/reject", ["DRIVER"]],
     ["POST", "/drivers/kyc/submit", ["DRIVER"]],

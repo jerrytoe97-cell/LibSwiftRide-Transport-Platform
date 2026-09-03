@@ -134,6 +134,47 @@ paths:
       responses:
         "200": { description: Tokens rotated }
         "401": { description: Invalid refresh token }
+  /locations/search:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Search Liberia addresses (Passenger only; provider credentials remain server-side)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string, minLength: 3, maxLength: 150 }
+      responses:
+        "200": { description: "data array of id, address, latitude, longitude; private/no-store" }
+        "401": { description: Authentication required }
+        "403": { description: Passenger role required }
+        "422": { description: Invalid search input }
+        "429": { description: Address lookup rate limit reached }
+        "503": { description: Geocoding disabled or unavailable }
+  /locations/reverse:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Resolve GPS coordinates to an address (Passenger only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [latitude, longitude]
+              properties:
+                latitude: { type: number, minimum: -90, maximum: 90 }
+                longitude: { type: number, minimum: -180, maximum: 180 }
+      responses:
+        "200": { description: "data object with id, address, latitude, longitude, or null; private/no-store" }
+        "401": { description: Authentication required }
+        "403": { description: Passenger role required }
+        "422": { description: Invalid coordinates }
+        "429": { description: Address lookup rate limit reached }
+        "503": { description: Geocoding disabled or unavailable }
   /rides/quote:
     post:
       security: [{ bearerAuth: [] }]

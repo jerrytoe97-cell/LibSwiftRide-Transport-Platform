@@ -247,4 +247,4 @@ export const rideStatusLabel = (status: string, locale: SupportedLocale) => {
   return labels[locale][status] ?? status.replaceAll("_", " ");
 };
 export const money = (minor: number, currency = "LRD", locale: SupportedLocale = "en") =>
-  new Intl.NumberFormat(locale === "fr" ? "fr-LR" : "en-LR", { style: "currency", currency }).format(minor / 100);
+  new Intl.NumberFormat(locale === "fr" ? "fr-LR" : "en-LR", { style: "currency", currency, currencyDisplay: "code", ...(currency === "LRD" && minor % 100 === 0 ? { minimumFractionDigits: 0, maximumFractionDigits: 0 } : {}) }).format(minor / 100);

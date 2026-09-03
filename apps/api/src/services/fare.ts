@@ -1,4 +1,5 @@
 import { calculateSplit } from "../lib.js";
+import { economyTariff, type EconomyTariff } from "../pricing-config.js";
 
 export type FareInput = {
   distanceM: number;
@@ -32,18 +33,22 @@ export function demandMultiplierFor(searchingRides: number, availableDrivers: nu
   return 1;
 }
 
-export function calculateFare(input: FareInput) {
-  const { distanceM, durationSec, demandMultiplier = 1, waitingTimeSec = 0, tollMinor = 0, promo } = input;
+export function calculateFare(input: FareInput, tariff: EconomyTariff = economyTariff) {
+  const { distanceM, durationSec, demandMultiplier = tariff.defaultMultiplier, waitingTimeSec = 0, tollMinor = 0, promo } = input;
   if (![distanceM, durationSec, demandMultiplier, waitingTimeSec, tollMinor].every(Number.isFinite) || distanceM < 0 || durationSec < 0 || demandMultiplier < 1 || waitingTimeSec < 0 || tollMinor < 0) {
     throw new Error("Invalid fare inputs");
   }
-  const baseMinor = 20_000;
-  const dynamicMultiplier = Math.min(demandMultiplier, 3);
-  const rawFare = Math.round((baseMinor + distanceM * 35 + durationSec * 8) * dynamicMultiplier);
-  const waitingFeeMinor = Math.round(Math.max(0, waitingTimeSec - 180) * 5);
-  const subtotalMinor = Math.max(30_000, rawFare) + waitingFeeMinor + Math.round(tollMinor);
-  const discountMinor = promo ? calculatePromoDiscount(subtotalMinor, promo) : 0;
-  const fareMinor = Math.max(0, subtotalMinor - discountMinor);
+  const baseMinor = tariff.baseFareMinor;
+  const dynamicMultiplier = Math.min(demandMultiplier, tariff.maximumMultiplier);
+  const rawFare = (baseMinor + distanceM / 1_000 * tariff.perKmMinor + durationSec / 60 * tariff.perMinuteMinor) * dynamicMultiplier;
+  const waitingFeeMinor = Math.round(Math.max(0, waitingTimeSec - tariff.waitingGraceSec) * tariff.waitingPerSecondMinor);
+  const unroundedSubtotal = Math.max(tariff.minimumFareMinor, rawFare) + waitingFeeMinor + Math.round(tollMinor);
+  if (!Number.isFinite(unroundedSubtotal) || unroundedSubtotal > 2_147_483_600) throw new Error("Fare exceeds supported money range");
+  const discountMinor = promo ? calculatePromoDiscount(Math.round(unroundedSubtotal), promo) : 0;
+  const fareMinor = Math.max(0, Math.round((unroundedSubtotal - discountMinor) / tariff.roundingIncrementMinor) * tariff.roundingIncrementMinor);
+  // Include the final rounding adjustment in the displayed gross subtotal so
+  // subtotal - discount = charged amount, without altering promo caps or splits.
+  const subtotalMinor = fareMinor + discountMinor;
   return {
     fareMinor,
     baseFareMinor: baseMinor,
@@ -53,7 +58,7 @@ export function calculateFare(input: FareInput) {
     tollMinor: Math.round(tollMinor),
     subtotalMinor,
     discountMinor,
-    currency: "LRD" as const,
+    currency: tariff.currency,
     estimatedDistanceM: Math.round(distanceM),
     estimatedDurationSec: Math.round(durationSec),
     ...calculateSplit(fareMinor)

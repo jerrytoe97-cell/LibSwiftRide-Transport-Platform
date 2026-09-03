@@ -580,8 +580,8 @@ export function Map({ latitude = 6.3156, longitude = -10.8074, label = "Monrovia
         if (currentMap.getSource("trip-route")) currentMap.removeSource("trip-route");
       }
       if (points.length > 1) {
-        const longitudes = points.map((point) => point.longitude);
-        const latitudes = points.map((point) => point.latitude);
+        const longitudes = [...points.map((point) => point.longitude), ...route.map((point) => point[0])];
+        const latitudes = [...points.map((point) => point.latitude), ...route.map((point) => point[1])];
         currentMap.fitBounds([[Math.min(...longitudes), Math.min(...latitudes)], [Math.max(...longitudes), Math.max(...latitudes)]], { padding: 70, duration: 600, maxZoom: 14 });
       } else currentMap.easeTo({ center: [longitude, latitude], duration: 600 });
     };
