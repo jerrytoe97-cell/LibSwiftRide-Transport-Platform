@@ -17,10 +17,13 @@ export type PaymentResult = {
   checkoutUrl?: string;
 };
 
+// Submission acceptance is not evidence that funds have been returned.
+export type RefundSubmission = { status: "PENDING" };
+
 export interface PaymentProvider {
   readonly method: PaymentMethod;
   createPayment(request: PaymentRequest): Promise<PaymentResult>;
-  refund(providerRef: string, amountMinor: number): Promise<void>;
+  refund(providerRef: string, amountMinor: number, idempotencyKey: string): Promise<RefundSubmission>;
 }
 
 export function verifyWebhookSignature(rawBody: string, signatureHex: string, secret: string) {
@@ -35,7 +38,7 @@ class SandboxMobileMoneyProvider implements PaymentProvider {
   async createPayment() {
     return { providerRef: `${this.method.toLowerCase()}_${randomUUID()}`, status: "PENDING" as const };
   }
-  async refund() {}
+  async refund(): Promise<RefundSubmission> { throw new Error("Sandbox refunds do not execute a provider transfer"); }
 }
 
 class HookPaymentProvider implements PaymentProvider {
@@ -57,15 +60,20 @@ class HookPaymentProvider implements PaymentProvider {
     if (!result.providerRef || !["PENDING", "AUTHORIZED", "CAPTURED"].includes(result.status)) throw new Error(`${this.method} provider returned an invalid response`);
     return result;
   }
-  async refund(providerRef: string, amountMinor: number) {
+  async refund(providerRef: string, amountMinor: number, idempotencyKey: string) {
+    if (!providerRef.trim() || !Number.isSafeInteger(amountMinor) || amountMinor <= 0 || amountMinor > 2_147_483_647) {
+      throw new Error("Refund requires a provider reference and positive integer minor units within the ledger limit");
+    }
+    if (typeof idempotencyKey !== "string" || !/^[A-Za-z0-9._:-]{1,128}$/.test(idempotencyKey)) throw new Error("Refund requires a header-safe idempotency key");
     if (!this.url || !this.token) throw new Error(`${this.method} refund provider is not configured`);
     const response = await resilientFetch(`${this.url}/${encodeURIComponent(providerRef)}/refunds`, {
-      method: "POST", headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
+      method: "POST", headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json", "idempotency-key": idempotencyKey },
       body: JSON.stringify({ amountMinor }),
       timeoutMs: 8_000,
       attempts: 2
     });
     if (!response.ok) throw new Error(`${this.method} refund failed`);
+    return { status: "PENDING" as const };
   }
 }
 
@@ -74,7 +82,7 @@ class CashProvider implements PaymentProvider {
   async createPayment() {
     return { providerRef: `cash_${randomUUID()}`, status: "AUTHORIZED" as const };
   }
-  async refund() {}
+  async refund(): Promise<RefundSubmission> { throw new Error("Cash refunds require manual reconciliation"); }
 }
 
 const providers: Partial<Record<PaymentMethod, PaymentProvider>> = {

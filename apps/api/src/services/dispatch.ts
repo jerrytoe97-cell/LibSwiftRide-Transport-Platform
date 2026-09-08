@@ -1,5 +1,6 @@
 import { prisma, redis } from "../lib.js";
 import { transactionalEmailContent } from "./transactional-email-templates.js";
+import { eligibleDriverWhere } from "./driver-eligibility.js";
 
 const ONLINE_TTL_SECONDS = 120;
 
@@ -42,7 +43,7 @@ export async function matchDriver(rideId: string) {
       continue;
     }
     const assigned = await prisma.$transaction(async (tx) => {
-      const driver = await tx.driver.updateMany({ where: { id: driverId, status: "AVAILABLE", verifiedAt: { not: null }, vehicle: { active: true } }, data: { status: "ON_TRIP" } });
+      const driver = await tx.driver.updateMany({ where: { id: driverId, status: "AVAILABLE", ...eligibleDriverWhere() }, data: { status: "ON_TRIP" } });
       if (!driver.count) return null;
       const claimed = await tx.ride.updateMany({ where: { id: ride.id, status: "SEARCHING", driverId: null }, data: { driverId, status: "DRIVER_ASSIGNED" } });
       if (!claimed.count) {
@@ -87,7 +88,7 @@ export async function activateScheduledRides(now = new Date()) {
         { userId: reservation.passengerId, channel: "IN_APP", template: "reservation-active", title: "Scheduled ride is starting", body: `We are finding a driver for your pickup at ${reservation.pickupAddress}.` },
         { userId: reservation.passengerId, channel: "PUSH", template: "reservation-active", title: "Scheduled ride is starting", body: "We are finding a driver for your scheduled ride." }
       ] }).catch(() => undefined);
-      void matchDriver(ride.id);
+      await matchDriver(ride.id);
     }
   }
   return due.length;

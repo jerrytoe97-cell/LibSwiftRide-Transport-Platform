@@ -8,6 +8,7 @@ import { addressQuery, gpsQuery, geocode, GeocodingError } from "./services/geoc
 import { economyTariff, effectiveSurgeMultiplier, tariffForBookedRide } from "./pricing-config.js";
 import { COMPANY_SHARE_BPS, DRIVER_SHARE_BPS, calculateSplit, prisma, redis } from "./lib.js";
 import { writeAudit } from "./services/audit.js";
+import { rideWalletSettlement } from "./services/ride-wallet-settlement.js";
 import { matchDriver } from "./services/dispatch.js";
 import { calculateFare, calculatePromoDiscount, demandMultiplierFor } from "./services/fare.js";
 import { markNotificationRead, queueNotification } from "./services/notifications.js";
@@ -25,10 +26,23 @@ import { decryptMfaSecret, encryptMfaSecret, generateMfaSecret, generateRecovery
 import { liberianPhoneLookupCandidates, normalizeLiberianPhone, selectAuthenticatedIdentity, strongPasswordSchema } from "./services/identity.js";
 import { allowedKycMimeTypes, createKycDownloadUrl, createKycUploadIntent, deleteKycObject, kycUploadEnabled, verifyAndScanKycObject } from "./services/kyc-storage.js";
 import { transactionalEmailContent } from "./services/transactional-email-templates.js";
+import { FinancialOperationError, requestDriverPayout, requestRefund, reviewRefund } from "./services/financial-operations.js";
+import { publicDriver, publicRide } from "./services/public-projections.js";
+import { consumeVerificationToken, lockIdentity } from "./services/verification-tokens.js";
+import { eligibleDriverWhere } from "./services/driver-eligibility.js";
+
+import { SafetyOperationError, updateSafetyIncident, escalateSafetyIncident, safetyContact } from "./services/safety-operations.js";
 
 export const api = Router();
 const asyncRoute = (handler: (req: any, res: any) => Promise<unknown>) =>
   (req: any, res: any, next: any) => Promise.resolve(handler(req, res)).catch(next);
+const financialRoute = (handler: (req: any, res: any) => Promise<unknown>) => asyncRoute(async (req, res) => {
+  try { return await handler(req, res); }
+  catch (error) {
+    if (error instanceof FinancialOperationError) return res.status(error.status).json({ error: { code: error.code, message: error.message } });
+    throw error;
+  }
+});
 
 const registration = z.object({
   phone: z.string().transform((value, context) => {
@@ -99,7 +113,12 @@ api.patch("/users/me", authenticate, asyncRoute(async (req, res) => {
     ...(input.locale !== undefined ? { locale: input.locale } : {}),
     ...(input.email !== undefined ? { email: input.email, emailVerifiedAt: null } : {})
   };
-  const user = await prisma.user.update({
+  const user = await prisma.$transaction(async (tx) => {
+    await lockIdentity(tx, req.user!.sub);
+    if (input.email !== undefined) {
+      await tx.verificationToken.updateMany({ where: { userId: req.user!.sub, type: { in: ["EMAIL_VERIFY", "PASSWORD_RESET"] }, usedAt: null }, data: { usedAt: new Date() } });
+    }
+    return tx.user.update({
     where: { id: req.user!.sub },
     data: profileUpdate,
     select: {
@@ -113,6 +132,7 @@ api.patch("/users/me", authenticate, asyncRoute(async (req, res) => {
       status: true,
       locale: true
     }
+  });
   });
   await writeAudit({ actorId: req.user!.sub, action: "PROFILE_UPDATED", entityType: "User", entityId: req.user!.sub, ipAddress: req.ip, metadata: { fields: Object.keys(input) } });
   res.json({ data: user });
@@ -203,15 +223,16 @@ const tokenDigest = (value: string) => createHash("sha256").update(value).digest
 async function createVerificationToken(userId: string, type: "EMAIL_VERIFY" | "PASSWORD_RESET" | "MFA_LOGIN" | "MFA_ENROLL") {
   const token = randomBytes(32).toString("hex");
   const issuedAt = new Date();
-  await prisma.$transaction([
-    prisma.verificationToken.updateMany({
+  await prisma.$transaction(async (tx) => {
+    await lockIdentity(tx, userId);
+    await tx.verificationToken.updateMany({
       where: { userId, type, usedAt: null },
       data: { usedAt: issuedAt }
-    }),
-    prisma.verificationToken.create({
+    });
+    await tx.verificationToken.create({
       data: { userId, type, tokenHash: tokenDigest(token), expiresAt: new Date(issuedAt.getTime() + (type === "PASSWORD_RESET" ? 3_600_000 : type.startsWith("MFA_") ? 300_000 : 86_400_000)) }
-    })
-  ]);
+    });
+  });
   return token;
 }
 
@@ -222,7 +243,7 @@ function mfaKey() {
 
 async function validMfaToken(token: string, type: "MFA_LOGIN" | "MFA_ENROLL") {
   const record = await prisma.verificationToken.findUnique({ where: { tokenHash: tokenDigest(token) }, include: { user: true } });
-  return record && record.type === type && !record.usedAt && record.expiresAt >= new Date() && requiresMfa(record.user.role) ? record : null;
+  return record && record.type === type && !record.usedAt && record.expiresAt > new Date() && record.user.status === "ACTIVE" && requiresMfa(record.user.role) ? record : null;
 }
 
 api.post("/auth/mfa/enrollment/start", asyncRoute(async (req, res) => {
@@ -231,10 +252,16 @@ api.post("/auth/mfa/enrollment/start", asyncRoute(async (req, res) => {
   if (!record) return res.status(401).json({ error: { code: "INVALID_MFA_ENROLLMENT", message: "MFA enrollment has expired. Sign in again." } });
   const secret = generateMfaSecret();
   const recoveryCodes = generateRecoveryCodes();
-  await prisma.mfaCredential.upsert({
+  await prisma.$transaction(async (tx) => {
+    await lockIdentity(tx, record.userId);
+    const current = await tx.verificationToken.findUniqueOrThrow({ where: { id: record.id } });
+    const enrolled = await tx.mfaCredential.findUnique({ where: { userId: record.userId } });
+    if (current.usedAt || current.expiresAt <= new Date() || enrolled?.verifiedAt) throw Object.assign(new Error("MFA enrollment is unavailable"), { status: 401, code: "INVALID_MFA_ENROLLMENT" });
+    await tx.mfaCredential.upsert({
     where: { userId: record.userId },
     update: { encryptedSecret: encryptMfaSecret(secret, mfaKey()), recoveryCodeHashes: recoveryCodes.map(recoveryCodeHash), verifiedAt: null },
     create: { userId: record.userId, encryptedSecret: encryptMfaSecret(secret, mfaKey()), recoveryCodeHashes: recoveryCodes.map(recoveryCodeHash) }
+  });
   });
   await writeAudit({ actorId: record.userId, action: "MFA_ENROLLMENT_STARTED", entityType: "User", entityId: record.userId, ipAddress: req.ip });
   res.setHeader("cache-control", "no-store");
@@ -249,11 +276,13 @@ api.post("/auth/mfa/enrollment/confirm", asyncRoute(async (req, res) => {
   if (!credential || !verifyTotp(decryptMfaSecret(credential.encryptedSecret, mfaKey()), input.code)) {
     return res.status(401).json({ error: { code: "INVALID_MFA_CODE", message: "The authenticator code is incorrect" } });
   }
-  await prisma.$transaction([
-    prisma.mfaCredential.update({ where: { id: credential.id }, data: { verifiedAt: new Date() } }),
-    prisma.verificationToken.update({ where: { id: record.id }, data: { usedAt: new Date() } }),
-    prisma.refreshToken.updateMany({ where: { userId: record.userId, revokedAt: null }, data: { revokedAt: new Date() } })
-  ]);
+  await prisma.$transaction(async (tx) => {
+    await lockIdentity(tx, record.userId);
+    await consumeVerificationToken(tx, record.id, "MFA_ENROLL");
+    const changed = await tx.mfaCredential.updateMany({ where: { id: credential.id, encryptedSecret: credential.encryptedSecret, verifiedAt: null }, data: { verifiedAt: new Date() } });
+    if (changed.count !== 1) throw Object.assign(new Error("MFA enrollment changed"), { status: 401, code: "INVALID_MFA_ENROLLMENT" });
+    await tx.refreshToken.updateMany({ where: { userId: record.userId, revokedAt: null }, data: { revokedAt: new Date() } });
+  });
   await writeAudit({ actorId: record.userId, action: "MFA_ENABLED", entityType: "User", entityId: record.userId, ipAddress: req.ip });
   res.json({ data: { id: record.user.id, role: record.user.role }, tokens: await issueTokens({ sub: record.user.id, role: record.user.role, mfa: true }) });
 }));
@@ -269,7 +298,7 @@ api.post("/auth/mfa/challenge", asyncRoute(async (req, res) => {
   const valid = verifyTotp(decryptMfaSecret(credential.encryptedSecret, mfaKey()), input.code) || recoveryIndex >= 0;
   if (!valid) return res.status(401).json({ error: { code: "INVALID_MFA_CODE", message: "The authenticator or recovery code is incorrect" } });
   await prisma.$transaction(async (tx) => {
-    await tx.verificationToken.update({ where: { id: record.id }, data: { usedAt: new Date() } });
+    await consumeVerificationToken(tx, record.id, "MFA_LOGIN");
     if (recoveryIndex >= 0) {
       const current = await tx.mfaCredential.findUniqueOrThrow({ where: { id: credential.id } });
       const currentHashes = z.array(z.string()).parse(current.recoveryCodeHashes);
@@ -314,17 +343,18 @@ api.post("/auth/email-verification/confirm", asyncRoute(async (req, res) => {
   const token = z.object({ token: z.string().min(32) }).parse(req.body).token;
   const record = await prisma.verificationToken.findUnique({ where: { tokenHash: tokenDigest(token) } });
   if (!record || record.type !== "EMAIL_VERIFY" || record.usedAt || record.expiresAt < new Date()) return res.status(400).json({ error: { code: "INVALID_TOKEN", message: "Verification token is invalid or expired" } });
-  await prisma.$transaction([
-    prisma.verificationToken.update({ where: { id: record.id }, data: { usedAt: new Date() } }),
-    prisma.user.update({ where: { id: record.userId }, data: { emailVerifiedAt: new Date() } })
-  ]);
+  await prisma.$transaction(async (tx) => {
+    await lockIdentity(tx, record.userId);
+    await consumeVerificationToken(tx, record.id, "EMAIL_VERIFY");
+    await tx.user.update({ where: { id: record.userId }, data: { emailVerifiedAt: new Date() } });
+  });
   res.json({ data: { verified: true } });
 }));
 
 api.post("/auth/password-reset/request", asyncRoute(async (req, res) => {
   const email = z.object({ email: z.email() }).parse(req.body).email;
   const user = await prisma.user.findUnique({ where: { email } });
-  if (user) {
+  if (user?.emailVerifiedAt && user.status === "ACTIVE") {
     await (async () => {
       const token = await createVerificationToken(user.id, "PASSWORD_RESET");
       await queueNotification({ userId: user.id, channel: "EMAIL", ...transactionalEmailContent({ template: "password-reset", token }) });
@@ -338,12 +368,17 @@ api.post("/auth/password-reset/confirm", asyncRoute(async (req, res) => {
   const record = await prisma.verificationToken.findUnique({ where: { tokenHash: tokenDigest(input.token) } });
   if (!record || record.type !== "PASSWORD_RESET" || record.usedAt || record.expiresAt < new Date()) return res.status(400).json({ error: { code: "INVALID_TOKEN", message: "Reset token is invalid or expired" } });
   const securityAlert = transactionalEmailContent({ template: "account-security-alert", event: "Your LibSwiftRide password was changed and all previous sessions were signed out." });
-  await prisma.$transaction([
-    prisma.user.update({ where: { id: record.userId }, data: { passwordHash: await hashPassword(input.password) } }),
-    prisma.verificationToken.update({ where: { id: record.id }, data: { usedAt: new Date() } }),
-    prisma.refreshToken.updateMany({ where: { userId: record.userId, revokedAt: null }, data: { revokedAt: new Date() } }),
-    prisma.notification.create({ data: { userId: record.userId, channel: "EMAIL", ...securityAlert } })
-  ]);
+  const passwordHash = await hashPassword(input.password);
+  await prisma.$transaction(async (tx) => {
+    await lockIdentity(tx, record.userId);
+    const user = await tx.user.findUniqueOrThrow({ where: { id: record.userId } });
+    if (!user.emailVerifiedAt || user.status !== "ACTIVE") throw Object.assign(new Error("Recovery is unavailable"), { status: 400, code: "INVALID_TOKEN" });
+    await consumeVerificationToken(tx, record.id, "PASSWORD_RESET");
+    await tx.user.update({ where: { id: record.userId }, data: { passwordHash } });
+    await tx.verificationToken.updateMany({ where: { userId: record.userId, usedAt: null }, data: { usedAt: new Date() } });
+    await tx.refreshToken.updateMany({ where: { userId: record.userId, revokedAt: null }, data: { revokedAt: new Date() } });
+    await tx.notification.create({ data: { userId: record.userId, channel: "EMAIL", ...securityAlert } });
+  });
   res.json({ data: { reset: true } });
 }));
 
@@ -400,6 +435,7 @@ async function currentDemandMultiplier(pickup?: { latitude: number; longitude: n
 }
 
 api.get("/payments/mobile-money/:method/display", authenticate, authorize("PASSENGER"), asyncRoute(async (req, res) => {
+  if (!config.PAYMENTS_ENABLED) return res.status(422).json({ error: { code: "PAYMENT_METHOD_DISABLED", message: "Pay the driver in cash on arrival at your destination" } });
   const method = mobileMoneyMethod.parse(req.params.method);
   const paymentNumber = mobileMoneyDisplayNumber(method);
   if (!paymentNumber) {
@@ -439,6 +475,7 @@ api.post("/rides", authenticate, authorize("PASSENGER"), asyncRoute(async (req, 
       meetAndGreet: z.boolean().default(false)
     }).optional()
   }).parse(req.body);
+  if (!config.PAYMENTS_ENABLED && input.paymentMethod !== "CASH") return res.status(422).json({ error: { code: "PAYMENT_METHOD_DISABLED", message: "Only cash on arrival at your destination is available" } });
   if (input.scheduledFor && !validateRideSchedule(input.scheduledFor)) {
     return res.status(422).json({ error: { code: "INVALID_SCHEDULE", message: "Scheduled rides must be 15 minutes to 30 days in advance" } });
   }
@@ -540,7 +577,7 @@ api.get("/rides", authenticate, asyncRoute(async (req, res) => {
   const page = hasMore ? rides.slice(0, limit) : rides;
   const driverUserIds = [...new Set(page.flatMap((ride) => ride.driver ? [ride.driver.userId] : []))];
   const summaries = new Map(await Promise.all(driverUserIds.map(async (userId) => [userId, await ratingSummary(userId)] as const)));
-  const data = page.map((ride) => ({ ...ride, driver: ride.driver ? { ...ride.driver, rating: summaries.get(ride.driver.userId) ?? { average: null, count: 0 } } : null }));
+  const data = page.map((ride) => ({ ...publicRide(ride), driver: ride.driver ? { ...publicDriver(ride.driver), rating: summaries.get(ride.driver.userId) ?? { average: null, count: 0 } } : null }));
   res.json({ data, meta: { hasMore, nextCursor: hasMore ? page.at(-1)?.id ?? null : null } });
 }));
 
@@ -580,7 +617,7 @@ api.get("/rides/:id", authenticate, asyncRoute(async (req, res) => {
   const ownsRide = ride.passengerId === req.user!.sub || ride.driver?.userId === req.user!.sub;
   if (!ownsRide && !["ADMIN", "SUPPORT"].includes(req.user!.role)) return res.status(403).json({ error: { code: "FORBIDDEN", message: "Ride access denied" } });
   const driverRating = ride.driver ? await ratingSummary(ride.driver.userId) : null;
-  res.json({ data: { ...ride, driver: ride.driver ? { ...ride.driver, rating: driverRating } : null } });
+  res.json({ data: { ...publicRide(ride), driver: ride.driver ? { ...publicDriver(ride.driver), rating: driverRating } : null } });
 }));
 
 api.get("/rides/:id/receipt", authenticate, asyncRoute(async (req, res) => {
@@ -640,6 +677,7 @@ api.post("/rides/:id/transitions", authenticate, authorize("PASSENGER", "DRIVER"
   if (!participant && !["ADMIN", "SUPPORT"].includes(req.user!.role)) return res.status(403).json({ error: { code: "FORBIDDEN", message: "Ride access denied" } });
   assertTransition(ride.status as RideState, status);
   const driverAction = ["DRIVER_ARRIVING", "DRIVER_ARRIVED", "IN_PROGRESS", "COMPLETED"].includes(status);
+  if (req.user!.role !== "ADMIN" && ((input.tollMinor !== undefined && input.tollMinor !== ride.tollMinor) || (input.waitingTimeSec !== undefined && input.waitingTimeSec !== ride.waitingTimeSec))) return res.status(403).json({ error: { code: "FARE_ADJUSTMENT_FORBIDDEN", message: "Fare adjustments require administrator review" } });
   if (driverAction && ride.driver?.userId !== req.user!.sub && req.user!.role !== "ADMIN") return res.status(403).json({ error: { code: "DRIVER_REQUIRED", message: "Only the assigned driver can perform this transition" } });
   if (status === "PASSENGER_BOARDED" && ride.passengerId !== req.user!.sub && req.user!.role !== "ADMIN") return res.status(403).json({ error: { code: "PASSENGER_REQUIRED", message: "Only the passenger can confirm boarding" } });
   if (status === "COMPLETED" && ride.paymentMethod !== "CASH" && ride.payment?.status !== "CAPTURED") return res.status(409).json({ error: { code: "PAYMENT_NOT_CONFIRMED", message: "Electronic payment must be confirmed before completion" } });
@@ -656,7 +694,13 @@ api.post("/rides/:id/transitions", authenticate, authorize("PASSENGER", "DRIVER"
     return res.status(409).json({ error: { code: "PAYMENT_AMOUNT_MISMATCH", message: "Confirm the adjusted fare before completing the ride" } });
   }
   const updated = await prisma.$transaction(async (tx) => {
+    // Serialize first-ride qualification, even when two trips finish concurrently.
+    await lockIdentity(tx, ride.passengerId);
     const now = new Date();
+    if (status === "COMPLETED" && ride.paymentMethod !== "CASH") {
+      const paid = await tx.payment.findUnique({ where: { rideId: ride.id } });
+      if (!paid || paid.status !== "CAPTURED" || paid.method !== ride.paymentMethod || paid.currency !== ride.currency || paid.amountMinor !== finalPricing!.fareMinor) throw Object.assign(new Error("Payment changed before settlement"), { code: "PAYMENT_CONFLICT" });
+    }
     const result = await tx.ride.update({ where: { id: ride.id, status: ride.status }, data: {
       status,
       ...(status === "DRIVER_ARRIVING" ? { acceptedAt: now } : {}),
@@ -664,17 +708,26 @@ api.post("/rides/:id/transitions", authenticate, authorize("PASSENGER", "DRIVER"
       ...(status === "PASSENGER_BOARDED" ? { boardedAt: now } : {}),
       ...(status === "IN_PROGRESS" ? { startedAt: now } : {}),
       ...(status === "COMPLETED" ? { completedAt: now, ...finalPricing } : {}),
-      ...(status === "CANCELLED" ? { cancelledAt: now, cancellationReason: input.cancellationReason! } : {})
+      ...(status === "CANCELLED" ? { cancelledAt: now, cancellationReason: input.cancellationReason! } : {}),
+      ...(status === "SEARCHING" ? { driverId: null } : {})
     } });
     await tx.rideEvent.create({ data: { rideId: ride.id, type: `RIDE_${status}`, actorId: req.user!.sub, ...(status === "CANCELLED" ? { metadata: { reason: input.cancellationReason } } : {}) } });
-    if (ride.driverId && ["COMPLETED", "CANCELLED"].includes(status)) await tx.driver.update({ where: { id: ride.driverId }, data: { status: "AVAILABLE" } });
+    if (ride.driverId && ["COMPLETED", "CANCELLED", "SEARCHING"].includes(status)) {
+      await tx.driver.updateMany({ where: { id: ride.driverId, status: "ON_TRIP", ...eligibleDriverWhere(now) }, data: { status: "AVAILABLE" } });
+      await tx.driver.updateMany({ where: { id: ride.driverId, status: "ON_TRIP" }, data: { status: "OFFLINE" } });
+      if (status !== "COMPLETED") await tx.rideOffer.updateMany({ where: { rideId: ride.id, driverId: ride.driverId, status: "OFFERED" }, data: { status: "REJECTED", respondedAt: now } });
+    }
     if (status === "COMPLETED" && ride.driver) {
       const earningsMinor = finalPricing!.driverEarningsMinor;
       if (ride.paymentMethod === "CASH") {
         await tx.payment.upsert({ where: { rideId: ride.id }, update: { amountMinor: finalPricing!.fareMinor, status: "CAPTURED", capturedAt: now }, create: { rideId: ride.id, provider: "CASH", providerRef: `cash:${ride.id}`, idempotencyKey: `cash:${ride.id}`, amountMinor: finalPricing!.fareMinor, currency: ride.currency, method: "CASH", status: "CAPTURED", capturedAt: now } });
       }
       const wallet = await tx.wallet.upsert({ where: { userId: ride.driver.userId }, update: {}, create: { userId: ride.driver.userId } });
-      await tx.wallet.update({ where: { id: wallet.id }, data: { balanceMinor: { increment: earningsMinor }, transactions: { create: { type: "CREDIT", amountMinor: earningsMinor, balanceMinor: wallet.balanceMinor + earningsMinor, reference: `ride:${ride.id}`, idempotencyKey: `ride-earnings:${ride.id}`, description: "Driver ride earnings" } } } });
+      const settlement = rideWalletSettlement(ride.paymentMethod, finalPricing!.fareMinor, earningsMinor);
+      if (settlement.amountMinor > 0) {
+        const settledWallet = await tx.wallet.update({ where: { id: wallet.id }, data: { balanceMinor: { increment: settlement.deltaMinor } } });
+        await tx.walletTransaction.create({ data: { walletId: wallet.id, type: settlement.type, amountMinor: settlement.amountMinor, balanceMinor: settledWallet.balanceMinor, reference: `ride:${ride.id}`, idempotencyKey: `ride-earnings:${ride.id}`, description: settlement.description } });
+      }
       const programs = await tx.incentiveProgram.findMany({ where: { active: true, startsAt: { lte: now }, endsAt: { gte: now }, OR: [{ fleetId: null }, { fleetId: ride.driver.fleetId }] } });
       for (const program of programs) {
         const rideCount = await tx.ride.count({ where: { driverId: ride.driver.id, status: "COMPLETED", completedAt: { gte: program.startsAt, lte: program.endsAt } } });
@@ -691,11 +744,15 @@ api.post("/rides/:id/transitions", authenticate, authorize("PASSENGER", "DRIVER"
     if (status === "COMPLETED") {
       const referral = await tx.referral.findUnique({ where: { referredUserId: ride.passengerId } });
       const completedRides = await tx.ride.count({ where: { passengerId: ride.passengerId, status: "COMPLETED" } });
-      if (referral?.status === "PENDING" && completedRides === 1) {
+      if (referral?.status === "PENDING" && referral.referrerId !== ride.passengerId && completedRides === 1) {
         const referralRewardMinor = referralRewardFor(completedRides, finalPricing!.fareMinor);
+        if (referralRewardMinor > finalPricing!.companyCommissionMinor) throw new Error("Referral exceeds company commission");
+        const claimed = await tx.referral.updateMany({ where: { id: referral.id, status: "PENDING" }, data: { status: "REWARDED", rewardMinor: referralRewardMinor, qualifiedAt: now, rewardedAt: now } });
+        if (claimed.count !== 1) throw Object.assign(new Error("Referral qualification changed"), { code: "RIDE_CONFLICT" });
         const referrerWallet = await tx.wallet.upsert({ where: { userId: referral.referrerId }, update: {}, create: { userId: referral.referrerId } });
-        await tx.wallet.update({ where: { id: referrerWallet.id }, data: { balanceMinor: { increment: referralRewardMinor }, transactions: { create: { type: "CREDIT", amountMinor: referralRewardMinor, balanceMinor: referrerWallet.balanceMinor + referralRewardMinor, reference: `referral:${referral.id}`, idempotencyKey: `referral-reward:${referral.id}`, description: "Passenger referral reward: 2% of first completed ride" } } } });
-        await tx.referral.update({ where: { id: referral.id }, data: { status: "REWARDED", rewardMinor: referralRewardMinor, qualifiedAt: now, rewardedAt: now } });
+        const credited = await tx.wallet.update({ where: { id: referrerWallet.id }, data: { balanceMinor: { increment: referralRewardMinor } } });
+        await tx.walletTransaction.create({ data: { walletId: credited.id, type: "CREDIT", amountMinor: referralRewardMinor, balanceMinor: credited.balanceMinor, reference: `referral:${referral.id}`, idempotencyKey: `referral-reward:${referral.id}`, description: "First-ride referral funded from company commission", metadata: { rideId: ride.id, grossCommissionMinor: finalPricing!.companyCommissionMinor, companyNetMinor: finalPricing!.companyCommissionMinor - referralRewardMinor } } });
+        await tx.rideEvent.create({ data: { rideId: ride.id, type: "REFERRAL_COMMISSION_ALLOCATED", metadata: { referralId: referral.id, rewardMinor: referralRewardMinor, companyNetMinor: finalPricing!.companyCommissionMinor - referralRewardMinor } } });
         await tx.notification.createMany({ data: [{ userId: referral.referrerId, channel: "IN_APP", template: "referral-reward", title: "Referral reward earned", body: "Your referral completed their first ride. The reward is now in your wallet." }, { userId: referral.referrerId, channel: "PUSH", template: "referral-reward", title: "Referral reward earned", body: "Your referral reward is now in your wallet." }] });
       }
     }
@@ -719,7 +776,7 @@ api.post("/drivers/rides/:id/accept", authenticate, authorize("DRIVER"), asyncRo
   if (!driver) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Driver profile not found" } });
   const accepted = await prisma.$transaction(async (tx) => {
     const claimed = await tx.ride.updateMany({
-      where: { id: req.params.id, driverId: driver.id, status: "DRIVER_ASSIGNED" },
+      where: { id: req.params.id, driverId: driver.id, status: "DRIVER_ASSIGNED", driver: { is: { ...eligibleDriverWhere(), status: "ON_TRIP" } }, offers: { some: { driverId: driver.id, status: "OFFERED", offeredAt: { gt: new Date(Date.now() - 60_000) } } } },
       data: { status: "DRIVER_ARRIVING", acceptedAt: new Date() }
     });
     if (!claimed.count) return null;
@@ -836,12 +893,27 @@ api.post("/rides/:id/sos", authenticate, asyncRoute(async (req, res) => {
   res.status(201).json({ data: { id: incident.id, status: incident.status, createdAt: incident.createdAt } });
 }));
 
-api.patch("/safety/incidents/:id", authenticate, authorize("ADMIN", "SUPPORT", "DISPATCHER"), asyncRoute(async (req, res) => {
+const safetyRoute = (handler: (req: any, res: any) => Promise<unknown>) => asyncRoute(async (req, res) => {
+  try { return await handler(req, res); }
+  catch (error) {
+    if (error instanceof SafetyOperationError) return res.status(error.status).json({ error: { code: error.code, message: error.message } });
+    throw error;
+  }
+});
+
+api.patch("/safety/incidents/:id", authenticate, authorize("ADMIN", "SUPPORT", "DISPATCHER"), safetyRoute(async (req, res) => {
   const status = z.object({ status: z.enum(["ACKNOWLEDGED", "RESOLVED"]) }).parse(req.body).status;
-  const now = new Date();
-  const incident = await prisma.safetyIncident.update({ where: { id: req.params.id }, data: status === "ACKNOWLEDGED" ? { status, acknowledgedBy: req.user!.sub, acknowledgedAt: now } : { status, resolvedBy: req.user!.sub, resolvedAt: now } });
-  await writeAudit({ actorId: req.user!.sub, action: `SOS_${status}`, entityType: "SafetyIncident", entityId: incident.id, ipAddress: req.ip });
-  res.json({ data: incident });
+  res.json({ data: await updateSafetyIncident(z.uuid().parse(req.params.id), status, { actorId: req.user!.sub, ipAddress: req.ip }) });
+}));
+
+api.post("/safety/incidents/:id/escalate", authenticate, authorize("ADMIN", "SUPPORT", "DISPATCHER"), safetyRoute(async (req, res) => {
+  res.json({ data: await escalateSafetyIncident(z.uuid().parse(req.params.id), { actorId: req.user!.sub, ipAddress: req.ip }) });
+}));
+
+api.post("/safety/incidents/:id/contact", authenticate, authorize("ADMIN", "SUPPORT", "DISPATCHER"), safetyRoute(async (req, res) => {
+  const { target } = z.object({ target: z.enum(["driver", "passenger"]) }).parse(req.body);
+  res.set("Cache-Control", "no-store");
+  res.json({ data: await safetyContact(z.uuid().parse(req.params.id), target, { actorId: req.user!.sub, ipAddress: req.ip }) });
 }));
 
 api.get("/safety/incidents", authenticate, authorize("ADMIN", "SUPPORT", "DISPATCHER"), asyncRoute(async (req, res) => {
@@ -891,6 +963,7 @@ api.delete("/favourite-places/:id", authenticate, authorize("PASSENGER"), asyncR
 
 api.post("/rides/:id/payments", authenticate, asyncRoute(async (req, res) => {
   const input = z.object({ method: z.enum(["CASH", "ORANGE_MONEY", "MTN_MOMO", "STRIPE", "WALLET"]), phone: z.string().optional(), returnUrl: z.url().optional() }).parse(req.body);
+  if (!config.PAYMENTS_ENABLED && input.method !== "CASH") return res.status(422).json({ error: { code: "PAYMENT_METHOD_DISABLED", message: "Only cash on arrival at your destination is available" } });
   const ride = await prisma.ride.findUnique({ where: { id: req.params.id } });
   if (!ride || ride.passengerId !== req.user!.sub) return res.status(404).json({ error: { code: "NOT_FOUND", message: "Ride not found" } });
   const idempotencyKey = z.string().min(8).parse(req.header("idempotency-key"));
@@ -922,6 +995,7 @@ api.post("/payments/:id/confirm-cash", authenticate, authorize("DRIVER", "ADMIN"
 }));
 
 api.post("/payments/:id/confirm-mobile-money", authenticate, authorize("ADMIN", "SUPPORT"), asyncRoute(async (req, res) => {
+  if (!config.PAYMENTS_ENABLED) return res.status(422).json({ error: { code: "PAYMENT_METHOD_DISABLED", message: "Electronic payments are disabled" } });
   const input = z.object({
     providerReference: z.string().trim().min(6).max(120),
     evidenceReference: z.string().trim().min(6).max(240)
@@ -944,22 +1018,16 @@ api.post("/payments/:id/confirm-mobile-money", authenticate, authorize("ADMIN", 
   res.json({ data: confirmed });
 }));
 
-api.post("/rides/:id/refunds", authenticate, authorize("ADMIN", "SUPPORT"), asyncRoute(async (req, res) => {
-  const input = z.object({ amountMinor: z.number().int().positive(), reason: z.string().trim().min(5).max(500) }).parse(req.body);
+api.post("/rides/:id/refunds", authenticate, authorize("ADMIN", "SUPPORT"), financialRoute(async (req, res) => {
+  const input = z.object({ amountMinor: z.number().int().positive().max(2_147_483_647), reason: z.string().trim().min(5).max(500) }).parse(req.body);
   const idempotencyKey = z.string().min(8).parse(req.header("idempotency-key"));
-  const ride = await prisma.ride.findUnique({ where: { id: req.params.id }, include: { payment: true, refunds: true } });
-  if (!ride?.payment || ride.payment.status !== "CAPTURED") return res.status(409).json({ error: { code: "PAYMENT_NOT_REFUNDABLE", message: "A captured payment is required" } });
-  const refundedMinor = ride.refunds.filter((refund) => !["REJECTED", "FAILED"].includes(refund.status)).reduce((sum, refund) => sum + refund.amountMinor, 0);
-  if (refundedMinor + input.amountMinor > ride.payment.amountMinor) return res.status(422).json({ error: { code: "REFUND_EXCEEDS_PAYMENT", message: "Refund exceeds the captured payment" } });
-  const refund = await prisma.refund.upsert({ where: { idempotencyKey }, update: {}, create: { rideId: ride.id, paymentId: ride.payment.id, requestedById: req.user!.sub, idempotencyKey, ...input } });
-  await writeAudit({ actorId: req.user!.sub, action: "REFUND_REQUESTED", entityType: "Refund", entityId: refund.id, ipAddress: req.ip, metadata: { rideId: ride.id, amountMinor: refund.amountMinor } });
+  const refund = await requestRefund({ ...input, rideId: req.params.id, idempotencyKey, actorId: req.user!.sub, ...(req.ip ? { ipAddress: req.ip } : {}) });
   res.status(201).json({ data: refund });
 }));
 
-api.patch("/admin/refunds/:id", authenticate, authorize("ADMIN"), asyncRoute(async (req, res) => {
+api.patch("/admin/refunds/:id", authenticate, authorize("ADMIN"), financialRoute(async (req, res) => {
   const status = z.object({ status: z.enum(["APPROVED", "REJECTED"]) }).parse(req.body).status;
-  const refund = await prisma.refund.update({ where: { id: req.params.id }, data: { status, reviewedById: req.user!.sub } });
-  await writeAudit({ actorId: req.user!.sub, action: `REFUND_${status}`, entityType: "Refund", entityId: refund.id, ipAddress: req.ip });
+  const refund = await reviewRefund({ refundId: req.params.id, status, actorId: req.user!.sub, ...(req.ip ? { ipAddress: req.ip } : {}) });
   res.json({ data: refund });
 }));
 
@@ -969,30 +1037,20 @@ api.get("/drivers/me/payouts", authenticate, authorize("DRIVER"), asyncRoute(asy
   res.json({ data: await prisma.driverPayout.findMany({ where: { driverId: driver.id }, orderBy: { createdAt: "desc" }, take: 100 }) });
 }));
 
-api.post("/admin/drivers/:id/payouts", authenticate, authorize("ADMIN"), asyncRoute(async (req, res) => {
-  const input = z.object({ amountMinor: z.number().int().positive(), periodStart: z.coerce.date(), periodEnd: z.coerce.date() }).refine((value) => value.periodEnd > value.periodStart, "Invalid payout period").parse(req.body);
+api.post("/admin/drivers/:id/payouts", authenticate, authorize("ADMIN"), financialRoute(async (req, res) => {
+  const input = z.object({ amountMinor: z.number().int().positive().max(2_147_483_647), periodStart: z.coerce.date(), periodEnd: z.coerce.date() }).refine((value) => value.periodEnd > value.periodStart, "Invalid payout period").parse(req.body);
   const idempotencyKey = z.string().min(8).parse(req.header("idempotency-key"));
-  const driver = await prisma.driver.findUnique({ where: { id: req.params.id }, include: { user: { include: { wallet: true } } } });
-  if (!driver?.user.wallet || driver.user.wallet.balanceMinor < input.amountMinor) return res.status(422).json({ error: { code: "INSUFFICIENT_DRIVER_BALANCE", message: "Driver wallet balance is insufficient" } });
-  const payout = await prisma.$transaction(async (tx) => {
-    const existing = await tx.driverPayout.findUnique({ where: { idempotencyKey } });
-    if (existing) return existing;
-    const updatedWallet = await tx.wallet.update({ where: { id: driver.user.wallet!.id }, data: { balanceMinor: { decrement: input.amountMinor } } });
-    const created = await tx.driverPayout.create({ data: { driverId: driver.id, idempotencyKey, ...input } });
-    await tx.walletTransaction.create({ data: { walletId: driver.user.wallet!.id, type: "PAYOUT", amountMinor: input.amountMinor, balanceMinor: updatedWallet.balanceMinor, reference: `payout:${created.id}`, idempotencyKey: `wallet:${idempotencyKey}`, description: "Driver payout pending" } });
-    return created;
-  });
-  await writeAudit({ actorId: req.user!.sub, action: "DRIVER_PAYOUT_CREATED", entityType: "DriverPayout", entityId: payout.id, ipAddress: req.ip, metadata: { driverId: driver.id, amountMinor: payout.amountMinor } });
+  const payout = await requestDriverPayout({ ...input, driverId: req.params.id, idempotencyKey, actorId: req.user!.sub, ...(req.ip ? { ipAddress: req.ip } : {}) });
   res.status(201).json({ data: payout });
 }));
 
 api.get("/notifications", authenticate, asyncRoute(async (req, res) => {
   const limit = z.coerce.number().int().min(1).max(100).default(25).parse(req.query.limit);
   const unreadOnly = z.enum(["true", "false"]).default("false").transform((value) => value === "true").parse(req.query.unreadOnly);
-  const where = { userId: req.user!.sub, ...(unreadOnly ? { readAt: null } : {}) };
+  const where = { userId: req.user!.sub, channel: "IN_APP" as const, ...(unreadOnly ? { readAt: null } : {}) };
   const [notifications, unread] = await Promise.all([
     prisma.notification.findMany({ where, orderBy: { createdAt: "desc" }, take: limit }),
-    prisma.notification.count({ where: { userId: req.user!.sub, readAt: null } })
+    prisma.notification.count({ where: { userId: req.user!.sub, channel: "IN_APP", readAt: null } })
   ]);
   res.json({ data: notifications, meta: { unread } });
 }));
@@ -1004,8 +1062,17 @@ api.post("/notifications/:id/read", authenticate, asyncRoute(async (req, res) =>
 
 api.post("/drivers/onboarding", authenticate, authorize("DRIVER"), asyncRoute(async (req, res) => {
   const input = z.object({ licenseNumber: z.string().min(4), nationalIdRef: z.string().min(4) }).parse(req.body);
-  const driver = await prisma.driver.upsert({ where: { userId: req.user!.sub }, update: { ...input, onboardingStep: "DOCUMENTS" }, create: { userId: req.user!.sub, ...input, onboardingStep: "DOCUMENTS" } });
-  await prisma.kycCase.upsert({ where: { driverId: driver.id }, update: {}, create: { driverId: driver.id } });
+  const driver = await prisma.$transaction(async (tx) => {
+    await lockIdentity(tx, req.user!.sub);
+    const existing = await tx.driver.findUnique({ where: { userId: req.user!.sub }, include: { kycCase: true } });
+    if (existing && (existing.verifiedAt || existing.status === "SUSPENDED" || existing.status === "ON_TRIP" || (existing.kycCase && !["DRAFT", "REJECTED"].includes(existing.kycCase.status)))) {
+      throw Object.assign(new Error("Verified or locked identity requires administrator review"), { status: 409, code: "IDENTITY_LOCKED" });
+    }
+    const result = await tx.driver.upsert({ where: { userId: req.user!.sub }, update: { ...input, onboardingStep: "DOCUMENTS" }, create: { userId: req.user!.sub, ...input, onboardingStep: "DOCUMENTS" } });
+    await tx.kycCase.upsert({ where: { driverId: result.id }, update: {}, create: { driverId: result.id } });
+    await tx.auditLog.create({ data: { actorId: req.user!.sub, action: "DRIVER_IDENTITY_SUBMITTED", entityType: "Driver", entityId: result.id } });
+    return result;
+  });
   res.json({ data: driver });
 }));
 
@@ -1177,7 +1244,7 @@ api.post("/fleet/vehicles", authenticate, authorize("FLEET_MANAGER", "ADMIN"), a
 
 api.get("/fleet/overview", authenticate, authorize("FLEET_MANAGER", "ADMIN"), asyncRoute(async (req, res) => {
   const fleets = await prisma.fleet.findMany({ where: req.user!.role === "ADMIN" ? {} : { managerId: req.user!.sub }, include: { drivers: { include: { user: true, vehicle: true } }, vehicles: true } });
-  res.json({ data: fleets });
+  res.json({ data: fleets.map((fleet) => ({ ...fleet, drivers: fleet.drivers.map(publicDriver) })) });
 }));
 
 api.get("/dispatch/rides", authenticate, authorize("DISPATCHER", "ADMIN", "SUPPORT"), asyncRoute(async (_req, res) => {
@@ -1187,7 +1254,7 @@ api.get("/dispatch/rides", authenticate, authorize("DISPATCHER", "ADMIN", "SUPPO
 
 api.get("/dispatch/drivers", authenticate, authorize("DISPATCHER", "ADMIN"), asyncRoute(async (_req, res) => {
   const drivers = await prisma.driver.findMany({
-    where: { status: "AVAILABLE", verifiedAt: { not: null }, vehicle: { is: { active: true } } },
+    where: { status: "AVAILABLE", ...eligibleDriverWhere() },
     select: { id: true, status: true, user: { select: { firstName: true, lastName: true } }, vehicle: { select: { make: true, model: true, plateNumber: true } } },
     orderBy: { updatedAt: "asc" },
     take: 200
@@ -1212,19 +1279,20 @@ api.patch("/dispatch/drivers/:id/status", authenticate, authorize("DISPATCHER", 
 api.post("/dispatch/rides/:id/assign", authenticate, authorize("DISPATCHER", "ADMIN"), asyncRoute(async (req, res) => {
   const driverId = z.object({ driverId: z.uuid() }).parse(req.body).driverId;
   const assigned = await prisma.$transaction(async (tx) => {
-    const driver = await tx.driver.updateMany({ where: { id: driverId, status: "AVAILABLE", verifiedAt: { not: null } }, data: { status: "ON_TRIP" } });
+    const driver = await tx.driver.updateMany({ where: { id: driverId, status: "AVAILABLE", ...eligibleDriverWhere() }, data: { status: "ON_TRIP" } });
     if (!driver.count) throw new Error("Driver is unavailable or unverified");
     const ride = await tx.ride.update({ where: { id: req.params.id, status: "SEARCHING" }, data: { driverId, status: "DRIVER_ASSIGNED", events: { create: { type: "DRIVER_ASSIGNED_MANUALLY", actorId: req.user!.sub, metadata: { driverId } } } } });
     await tx.rideOffer.upsert({ where: { rideId_driverId: { rideId: ride.id, driverId } }, update: { status: "OFFERED", offeredAt: new Date(), respondedAt: null }, create: { rideId: ride.id, driverId } });
+    await tx.auditLog.create({ data: { actorId: req.user!.sub, action: "RIDE_ASSIGNED", entityType: "Ride", entityId: ride.id, metadata: { driverId } } });
     return ride;
   });
-  await writeAudit({ actorId: req.user!.sub, action: "RIDE_ASSIGNED", entityType: "Ride", entityId: assigned.id, ipAddress: req.ip, metadata: { driverId } });
   res.json({ data: assigned });
 }));
 
 api.get("/reports/operations", authenticate, authorize("ADMIN", "DISPATCHER", "FLEET_MANAGER"), asyncRoute(async (req, res) => {
   const input = z.object({ from: z.coerce.date(), to: z.coerce.date() }).refine((value) => value.to > value.from && value.to.getTime() - value.from.getTime() <= 366 * 86_400_000, "Report range must be 366 days or less").parse(req.query);
   const fleet = req.user!.role === "FLEET_MANAGER" ? await prisma.fleet.findUnique({ where: { managerId: req.user!.sub } }) : null;
+  if (req.user!.role === "FLEET_MANAGER" && !fleet) return res.status(403).json({ error: { code: "FLEET_REQUIRED", message: "An assigned fleet is required" } });
   const rides = await prisma.ride.findMany({ where: { requestedAt: { gte: input.from, lte: input.to }, ...(fleet ? { driver: { fleetId: fleet.id } } : {}) }, select: { status: true, fareMinor: true, driverEarningsMinor: true, companyCommissionMinor: true, requestedAt: true, completedAt: true } });
   const completed = rides.filter((ride) => ride.status === "COMPLETED");
   res.json({ data: { period: input, rides: rides.length, completedRides: completed.length, completionRate: rides.length ? completed.length / rides.length : 0, grossBookingsMinor: completed.reduce((sum, ride) => sum + ride.fareMinor, 0), driverEarningsMinor: completed.reduce((sum, ride) => sum + ride.driverEarningsMinor, 0), platformCommissionMinor: completed.reduce((sum, ride) => sum + ride.companyCommissionMinor, 0), currency: "LRD" } });
@@ -1387,12 +1455,15 @@ api.post("/drivers/me/availability", authenticate, authorize("DRIVER"), asyncRou
   const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub }, include: { vehicle: true, kycCase: true } });
   if (!driver) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Driver profile not found" } });
   if (status === "AVAILABLE" && (!driver.verifiedAt || driver.kycCase?.status !== "APPROVED" || !driver.vehicle?.active)) return res.status(422).json({ error: { code: "DRIVER_NOT_READY", message: "Approved verification and an active vehicle are required" } });
-  if (driver.status === "ON_TRIP") return res.status(409).json({ error: { code: "ACTIVE_TRIP", message: "Availability cannot change during a trip" } });
-  const updated = await prisma.driver.update({ where: { id: driver.id }, data: { status } });
+  if (["ON_TRIP", "SUSPENDED"].includes(driver.status)) return res.status(409).json({ error: { code: "DRIVER_LOCKED", message: "Availability cannot change during a trip or suspension" } });
+  const changed = await prisma.driver.updateMany({ where: { id: driver.id, status: { in: ["OFFLINE", "AVAILABLE"] }, ...(status === "AVAILABLE" ? eligibleDriverWhere() : {}) }, data: { status } });
+  if (changed.count !== 1) return res.status(409).json({ error: { code: "DRIVER_NOT_READY", message: "Driver eligibility changed; approved KYC and current vehicle compliance are required" } });
+  const updated = await prisma.driver.findUniqueOrThrow({ where: { id: driver.id } });
   res.json({ data: updated });
 }));
 
 api.post("/payments/webhooks/:provider", asyncRoute(async (req, res) => {
+  if (!config.PAYMENTS_ENABLED) return res.status(503).json({ error: { code: "PAYMENT_METHOD_DISABLED", message: "Electronic payments are disabled" } });
   if (!verifyWebhookSignature(req.rawBody ?? "", req.header("x-libswiftride-signature") ?? "", config.PAYMENT_WEBHOOK_SECRET)) {
     return res.status(401).json({ error: { code: "INVALID_SIGNATURE", message: "Webhook signature invalid" } });
   }

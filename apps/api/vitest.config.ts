@@ -7,6 +7,9 @@ export default defineConfig({
     hookTimeout: 60_000,
     env: {
       NODE_ENV: "test",
+      PAYMENTS_ENABLED: "false",
+      NOTIFICATION_PROVIDER: "sandbox",
+      DEMO_MODE: "false",
       DATABASE_URL: process.env.TEST_DATABASE_URL ?? "postgresql://test:test@localhost:5432/libswiftride_test",
       REDIS_URL: process.env.TEST_REDIS_URL ?? "redis://localhost:6379",
       CORS_ORIGINS: "http://localhost:3000",

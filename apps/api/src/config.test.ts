@@ -18,6 +18,9 @@ const production = {
 } satisfies NodeJS.ProcessEnv;
 
 describe("production environment safeguards", () => {
+  it("refuses live payments even when mobile-money credentials are configured", () => {
+    expect(() => parseEnvironment({ ...production, PAYMENTS_ENABLED: "true", PAYMENT_PROVIDER: "mobile-money", MTN_MOMO_API_URL: "https://gateway.example.test", MTN_MOMO_API_TOKEN: "fictional-provider-token" })).toThrow("not certified");
+  });
   it("requires explicit surge activation", () => {
     expect(parseEnvironment(production).SURGE_PRICING_ENABLED).toBe(false);
     expect(parseEnvironment({ ...production, SURGE_PRICING_ENABLED: "true" }).SURGE_PRICING_ENABLED).toBe(true);

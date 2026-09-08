@@ -79,6 +79,9 @@ export const environmentSchema = z.object({
   KYC_FICTIONAL_ONLY: z.enum(["true", "false"]).default("true").transform((value) => value === "true"),
   KYC_UPLOAD_MAX_BYTES: z.coerce.number().int().min(1024).max(10 * 1024 * 1024).default(5 * 1024 * 1024)
 }).superRefine((environment, context) => {
+  if (environment.NODE_ENV === "production" && environment.PAYMENTS_ENABLED) {
+    context.addIssue({ code: "custom", path: ["PAYMENTS_ENABLED"], message: "Live electronic payments are not certified; keep PAYMENTS_ENABLED=false" });
+  }
   if (environment.GEOCODING_ENABLED && !environment.GEOCODING_API_TOKEN) {
     context.addIssue({ code: "custom", path: ["GEOCODING_API_TOKEN"], message: "GEOCODING_API_TOKEN is required when geocoding is enabled" });
   }

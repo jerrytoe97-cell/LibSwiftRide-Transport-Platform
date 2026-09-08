@@ -121,7 +121,8 @@ describe.sequential("end-to-end acceptance", () => {
     await request(app).post(`/api/v1/admin/kyc/${submitted.body.data.id}/review`).set("authorization", `Bearer ${adminToken}`).send({ decision: "APPROVED" }).expect(422);
     await prisma.kycDocument.update({ where: { id: profilePhoto.id }, data: { scanStatus: "CLEAN" } });
     await request(app).post(`/api/v1/admin/kyc/${submitted.body.data.id}/review`).set("authorization", `Bearer ${adminToken}`).send({ decision: "APPROVED" }).expect(200);
-    await prisma.vehicle.create({ data: { driverId, make: "Toyota", model: "Prius", year: 2022, color: "White", plateNumber: `T${suffix.slice(-6)}` } });
+    const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60_000);
+    await prisma.vehicle.create({ data: { driverId, make: "Toyota", model: "Prius", year: 2022, color: "White", plateNumber: `T${suffix.slice(-6)}`, insuranceExpiresAt: expiresAt, inspectionExpiresAt: expiresAt, registrationExpiresAt: expiresAt } });
     await request(app).post("/api/v1/drivers/me/availability").set("authorization", `Bearer ${driverToken}`).send({ status: "AVAILABLE" }).expect(200);
   });
 
@@ -183,7 +184,8 @@ describe.sequential("end-to-end acceptance", () => {
     const ratedRide = await request(app).get(`/api/v1/rides/${rideId}`).set("authorization", `Bearer ${passengerToken}`).expect(200);
     expect(ratedRide.body.data.driver.rating).toMatchObject({ average: 5, count: 1 });
     const driverWallet = await request(app).get("/api/v1/wallet").set("authorization", `Bearer ${driverToken}`).expect(200);
-    expect(driverWallet.body.data.balanceMinor).toBeGreaterThanOrEqual(ride.driverEarningsMinor);
+    const cashSettlement = await prisma.walletTransaction.findUniqueOrThrow({ where: { idempotencyKey: `ride-earnings:${rideId}` } });
+    expect(cashSettlement).toMatchObject({ walletId: driverWallet.body.data.id, type: "DEBIT", amountMinor: receipt.body.data.fare.companyCommissionMinor });
     expect(await prisma.payment.count({ where: { rideId, status: "CAPTURED", method: "CASH" } })).toBe(1);
     expect(await prisma.rating.count({ where: { rideId, authorId: passengerId } })).toBe(1);
     expect(await prisma.rideOffer.count({ where: { rideId, driverId, status: "ACCEPTED" } })).toBe(1);
@@ -215,16 +217,18 @@ describe.sequential("end-to-end acceptance", () => {
     expect(await prisma.routePoint.count({ where: { id: activeOld.id } })).toBe(1);
   });
 
-  it("protects cancellation, refunds and manual Mobile Money confirmation from replay", async () => {
+  it("protects cancellation and refund replay while manual Mobile Money stays disabled", async () => {
     const cancelled = await prisma.ride.create({ data: { passengerId, idempotencyKey: `cancel-${suffix}`, status: "SEARCHING", pickupAddress: "A", pickupLatitude: 6.3, pickupLongitude: -10.8, destinationAddress: "B", destinationLatitude: 6.31, destinationLongitude: -10.79, estimatedDistanceM: 1000, estimatedDurationSec: 300, fareMinor: 1000, driverEarningsMinor: 860, companyCommissionMinor: 140, paymentMethod: "MTN_MOMO" } });
     await request(app).post(`/api/v1/rides/${cancelled.id}/transitions`).set("authorization", `Bearer ${passengerToken}`).send({ status: "CANCELLED", cancellationReason: "Plans changed" }).expect(200);
     const paidRide = await prisma.ride.create({ data: { passengerId, idempotencyKey: `paid-${suffix}`, status: "CANCELLED", pickupAddress: "A", pickupLatitude: 6.3, pickupLongitude: -10.8, destinationAddress: "B", destinationLatitude: 6.31, destinationLongitude: -10.79, estimatedDistanceM: 1000, estimatedDurationSec: 300, fareMinor: 1000, driverEarningsMinor: 860, companyCommissionMinor: 140, paymentMethod: "MTN_MOMO" } });
     const payment = await prisma.payment.create({ data: { rideId: paidRide.id, provider: "MANUAL", idempotencyKey: `payment-${suffix}`, amountMinor: 1000, method: "MTN_MOMO", status: "PENDING" } });
     const confirmationKey = `confirm-${suffix}`;
     const confirmation = () => request(app).post(`/api/v1/payments/${payment.id}/confirm-mobile-money`).set("authorization", `Bearer ${adminToken}`).set("idempotency-key", confirmationKey).send({ providerReference: `provider-${suffix}`, evidenceReference: `evidence-${suffix}` });
-    await confirmation().expect(200);
-    await confirmation().expect(200);
-    expect(await prisma.manualPaymentConfirmation.count({ where: { paymentId: payment.id } })).toBe(1);
+    await confirmation().expect(422);
+    await confirmation().expect(422);
+    expect(await prisma.manualPaymentConfirmation.count({ where: { paymentId: payment.id } })).toBe(0);
+    // Synthetic captured fixture for refund accounting; never invoke a provider.
+    await prisma.payment.update({ where: { id: payment.id }, data: { status: "CAPTURED" } });
     const refundKey = `refund-${suffix}`;
     const refund = () => request(app).post(`/api/v1/rides/${paidRide.id}/refunds`).set("authorization", `Bearer ${adminToken}`).set("idempotency-key", refundKey).send({ amountMinor: 500, reason: "Acceptance test refund" });
     await refund().expect(201);
@@ -234,8 +238,10 @@ describe.sequential("end-to-end acceptance", () => {
 
   it("executes corporate, fleet, dispatcher and admin ownership workflows", async () => {
     const manager = await prisma.user.create({ data: { phone: `044${suffix.slice(-7)}`, email: `manager-${suffix}@example.test`, passwordHash: await hashPassword("Manager-password-123!"), firstName: "Business", lastName: "Manager", role: "PASSENGER", status: "ACTIVE" } });
-    const managerToken = (await issueTokens({ sub: manager.id, role: manager.role, mfa: true })).accessToken;
+    let managerToken = (await issueTokens({ sub: manager.id, role: manager.role, mfa: true })).accessToken;
     const account = await request(app).post("/api/v1/admin/corporate/accounts").set("authorization", `Bearer ${adminToken}`).send({ name: "Acceptance Company", billingEmail: `billing-${suffix}@example.test`, managerId: manager.id, monthlyBudgetMinor: 100_000 }).expect(201);
+    await request(app).get("/api/v1/corporate/account").set("authorization", `Bearer ${managerToken}`).expect(401);
+    managerToken = (await issueTokens({ sub: manager.id, role: "BUSINESS_MANAGER", mfa: true })).accessToken;
     await request(app).post("/api/v1/corporate/employees").set("authorization", `Bearer ${managerToken}`).send({ accountId: account.body.data.id, userId: passengerId, monthlyLimitMinor: 50_000 }).expect(201);
     await request(app).get("/api/v1/corporate/account").set("authorization", `Bearer ${managerToken}`).expect(200);
     const fleetManager = await prisma.user.create({ data: { phone: `033${suffix.slice(-7)}`, passwordHash: await hashPassword("Fleet-password-123!"), firstName: "Fleet", lastName: "Manager", role: "FLEET_MANAGER", status: "ACTIVE" } });

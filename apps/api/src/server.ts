@@ -14,6 +14,7 @@ import { verifyAccessToken } from "./auth.js";
 import { config } from "./config.js";
 import { prisma, redis, redisSubscriber } from "./lib.js";
 import { activateScheduledRides, updateDriverLocation } from "./services/dispatch.js";
+import { recoverDispatch } from "./services/dispatch-recovery.js";
 import { deliverPendingNotifications, queueNotification, safeSmtpErrorDetails, verifyZohoSmtpTransport } from "./services/notifications.js";
 import { logger } from "./logger.js";
 import { distanceMetres, estimateEtaSeconds } from "./services/tracking.js";
@@ -92,7 +93,7 @@ app.get("/openapi.json", (_req, res) => res.redirect(308, "/openapi.yaml"));
 app.use("/api/v1", api);
 app.use((_req, res) => res.status(404).json({ error: { code: "NOT_FOUND", message: "Route not found" } }));
 app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
-  req.log.error({ err: error }, "request failed");
+  req.log.error({ errorType: error instanceof Error ? error.name : "UnknownError" }, "request failed");
   if (error instanceof ZodError) return res.status(422).json({ error: { code: "VALIDATION_ERROR", message: validationErrorMessage(error), details: error.issues } });
   if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
     return res.status(409).json({
@@ -103,6 +104,8 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
     });
   }
   const kycCode = error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : null;
+  const safeDomainCodes = new Set(["INVALID_TOKEN", "INVALID_MFA_ENROLLMENT", "INVALID_MFA_CODE", "IDENTITY_LOCKED", "KYC_LOCKED", "RIDE_CONFLICT", "PAYMENT_CONFLICT"]);
+  if (kycCode && safeDomainCodes.has(kycCode)) return res.status(409).json({ error: { code: kycCode, message: "The operation is no longer available; refresh and try again" } });
   const safeKycCodes = new Set(["KYC_FILE_TYPE_MISMATCH", "KYC_MALWARE_DETECTED", "KYC_FILE_SIZE_MISMATCH", "KYC_FILE_METADATA_INVALID", "KYC_FILE_INCOMPLETE", "KYC_CHECKSUM_MISMATCH", "KYC_SCANNER_INVALID_RESPONSE"]);
   if (kycCode && safeKycCodes.has(kycCode)) return res.status(422).json({ error: { code: kycCode, message: error instanceof Error ? error.message : "Document security validation failed" } });
   if (kycCode === "KYC_STORAGE_UNAVAILABLE") return res.status(503).json({ error: { code: kycCode, message: "Private document storage is unavailable" } });
@@ -111,7 +114,7 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
 });
 
 const server = createServer(app);
-const wss = new WebSocketServer({ server, path: "/ws" });
+const wss = new WebSocketServer({ server, path: "/ws", maxPayload: 16 * 1024 });
 const rideSubscriptions = new Map<string, Set<import("ws").WebSocket>>();
 function broadcastToLocalRide(rideId: string, payload: string) {
   for (const subscriber of rideSubscriptions.get(rideId) ?? []) if (subscriber.readyState === 1) subscriber.send(payload);
@@ -144,11 +147,14 @@ wss.on("connection", async (socket, request) => {
   let lastChatAt = 0;
   socket.on("message", async (payload) => {
     try {
+      await verifyAccessToken(token);
       const event = JSON.parse(payload.toString());
       if (event.type === "ride.subscribe" && typeof event.rideId === "string") {
         const ride = await prisma.ride.findUnique({ where: { id: event.rideId }, include: { driver: true } });
         const allowed = ride && (ride.passengerId === user.sub || ride.driver?.userId === user.sub || ["ADMIN", "SUPPORT"].includes(user.role));
         if (!allowed) throw new Error("Ride subscription denied");
+        const subscribedCount = [...rideSubscriptions.values()].filter((set) => set.has(socket)).length;
+        if (subscribedCount >= 10 && !rideSubscriptions.get(event.rideId)?.has(socket)) throw new Error("Subscription limit exceeded");
         const subscribers = rideSubscriptions.get(event.rideId) ?? new Set();
         subscribers.add(socket);
         rideSubscriptions.set(event.rideId, subscribers);
@@ -215,6 +221,13 @@ const notificationTimer = setInterval(() => {
   deliverPendingNotifications().catch((error) => logger.error({ err: error }, "notification delivery cycle failed"));
 }, 5_000);
 notificationTimer.unref();
+let recoveringDispatch = false;
+const dispatchRecoveryTimer = setInterval(() => {
+  if (recoveringDispatch) return;
+  recoveringDispatch = true;
+  recoverDispatch().catch(() => logger.error("Dispatch recovery cycle failed")).finally(() => { recoveringDispatch = false; });
+}, 15_000);
+dispatchRecoveryTimer.unref();
 const scheduledRideTimer = setInterval(() => {
   activateScheduledRides().catch((error) => logger.error({ err: error }, "scheduled ride activation failed"));
 }, 30_000);
@@ -232,6 +245,7 @@ locationRetentionTimer.unref();
 
 async function shutdown() {
   clearInterval(notificationTimer);
+  clearInterval(dispatchRecoveryTimer);
   clearInterval(scheduledRideTimer);
   clearInterval(documentReminderTimer);
   clearInterval(locationRetentionTimer);

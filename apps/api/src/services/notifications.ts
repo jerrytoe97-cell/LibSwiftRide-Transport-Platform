@@ -20,7 +20,7 @@ export async function queueNotification(input: {
 
 export async function markNotificationRead(userId: string, id: string) {
   return prisma.notification.updateMany({
-    where: { id, userId },
+    where: { id, userId, channel: "IN_APP" },
     data: { status: "READ", readAt: new Date() }
   });
 }
