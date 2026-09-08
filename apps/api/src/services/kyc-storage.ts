@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { CopyObjectCommand, DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { config } from "../config.js";
 
@@ -105,7 +105,8 @@ export async function verifyAndScanKycObject(input: { storageKey: string; mimeTy
   if (head.ContentLength !== input.sizeBytes || head.ContentLength > config.KYC_UPLOAD_MAX_BYTES) throw Object.assign(new Error("Uploaded file size does not match the signed request"), { code: "KYC_FILE_SIZE_MISMATCH" });
   if (head.ContentType !== input.mimeType || head.Metadata?.fictional !== String(config.KYC_FICTIONAL_ONLY) || head.Metadata?.classification !== "restricted-kyc") throw Object.assign(new Error("Uploaded file metadata is invalid"), { code: "KYC_FILE_METADATA_INVALID" });
   if (config.KYC_S3_SERVER_SIDE_ENCRYPTION !== "provider" && head.ServerSideEncryption !== config.KYC_S3_SERVER_SIDE_ENCRYPTION) throw Object.assign(new Error("Uploaded file encryption metadata is invalid"), { code: "KYC_FILE_METADATA_INVALID" });
-  const object = await s3.send(new GetObjectCommand({ Bucket: config.KYC_S3_BUCKET!, Key: input.storageKey }));
+  if (!head.ETag) throw Object.assign(new Error("Uploaded object version is unavailable"), { code: "KYC_FILE_METADATA_INVALID" });
+  const object = await s3.send(new GetObjectCommand({ Bucket: config.KYC_S3_BUCKET!, Key: input.storageKey, IfMatch: head.ETag }));
   const bytes = await object.Body?.transformToByteArray();
   if (!bytes || bytes.length !== input.sizeBytes) throw Object.assign(new Error("Uploaded file could not be verified"), { code: "KYC_FILE_INCOMPLETE" });
   validateKycFile(bytes, input.mimeType);
@@ -117,9 +118,10 @@ export async function verifyAndScanKycObject(input: { storageKey: string; mimeTy
     await requestKycWebhookScan({ downloadUrl, checksum, mimeType: input.mimeType, sizeBytes: input.sizeBytes });
   } else throw Object.assign(new Error("KYC malware scanner is not configured"), { code: "KYC_SCANNER_UNAVAILABLE" });
   const storageKey = `kyc/clean/${input.storageKey.split("/").slice(2).join("/")}-${checksum.slice(0, 16)}`;
-  await s3.send(new CopyObjectCommand({
-    Bucket: config.KYC_S3_BUCKET!, CopySource: `${config.KYC_S3_BUCKET}/${encodeURIComponent(input.storageKey).replaceAll("%2F", "/")}`, Key: storageKey,
-    MetadataDirective: "COPY", ContentType: input.mimeType, ...writeEncryption()
+  // Persist exact verified bytes, never a mutable quarantine object after scanning.
+  await s3.send(new PutObjectCommand({
+    Bucket: config.KYC_S3_BUCKET!, Key: storageKey, Body: bytes,
+    Metadata: head.Metadata, ContentType: input.mimeType, ...writeEncryption()
   }));
   await s3.send(new DeleteObjectCommand({ Bucket: config.KYC_S3_BUCKET!, Key: input.storageKey }));
   return { storageKey, checksum, scanStatus: "CLEAN" as const, scannedAt: new Date() };
