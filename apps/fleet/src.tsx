@@ -11,7 +11,6 @@ type Report = { rides: number; completedRides: number; grossBookingsMinor: numbe
 function App() {
   const [fleets, setFleets] = useState<Fleet[]>([]);
   const [report, setReport] = useState<Report | null>(null);
-  const [driverId, setDriverId] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
 
@@ -32,15 +31,6 @@ function App() {
     load().catch((requestError: Error) => { setError(requestError.message); setLoading(false); });
   }, []);
 
-  async function assignDriver() {
-    if (!fleets[0] || !driverId) return;
-    try {
-      await apiClient.request("/fleet/drivers", { method: "POST", body: JSON.stringify({ fleetId: fleets[0].id, driverId }) });
-      setDriverId("");
-      await load();
-    } catch (requestError) { setError((requestError as Error).message); }
-  }
-
   async function removeDriver(id: string) {
     try {
       await apiClient.request(`/fleet/drivers/${id}`, { method: "DELETE" });
@@ -60,10 +50,8 @@ function App() {
       <Stat label="Platform commission" value={money(report?.platformCommissionMinor ?? 0)} detail="Enforced at 14%" />
     </div>
     <section className="hero"><Map label="Fleet map" /><div className="panel">
-      <h2>Add an existing driver</h2>
-      <p>Only verified, unassigned drivers can join the fleet. Active-trip drivers cannot be moved.</p>
-      <label>Driver ID<input value={driverId} onChange={(event) => setDriverId(event.target.value)} /></label>
-      <button className="action" onClick={assignDriver} disabled={!driverId}>Assign driver</button>
+      <h2>Driver enrollment</h2>
+      <p>Contact operations to enroll a driver. An administrator must review the enrollment evidence and vehicle compliance before the driver can go online.</p>
     </div></section>
     <section className="panel" aria-busy={loading}><h2>Managed drivers</h2>
       <table><thead><tr><th>Driver</th><th>Vehicle</th><th>Status</th><th>Action</th></tr></thead><tbody>
@@ -76,23 +64,16 @@ function App() {
     </section>
     <section className="split">
       <article className="panel"><span className="eyebrow">Vehicle utilisation</span><h2>Fleet health</h2>
-        <div className="mini-row"><span>Average utilisation</span><strong>74%</strong></div><div className="progress"><span style={{width:"74%"}} /></div>
+        <div className="mini-row"><span>Drivers on a trip</span><strong>{drivers.filter((driver) => driver.status === "ON_TRIP").length}</strong></div>
         <div className="mini-row"><span>Vehicles in service</span><strong>{vehicles.filter((vehicle)=>vehicle.active).length}</strong></div>
-        <div className="mini-row"><span>Inspection due soon</span><strong>2</strong></div>
       </article>
       <article className="panel"><span className="eyebrow">Payout summary</span><h2>Driver settlements</h2>
-        <div className="mini-row"><span>Available for payout</span><strong>{money(286_400)}</strong></div>
-        <div className="mini-row"><span>Processing</span><strong>{money(125_000)}</strong></div>
-        <div className="mini-row"><span>Paid this month</span><strong>{money(report?.driverEarningsMinor ?? 0)}</strong></div>
+        <div className="mini-row"><span>Ride earnings this period</span><strong>{money(report?.driverEarningsMinor ?? 0)}</strong></div>
+        <p>Ride earnings are not a payout balance. Cash drivers retain their earnings and remit the company commission through operations.</p>
       </article>
     </section>
-    <section className="panel"><span className="eyebrow">Maintenance and compliance</span><h2>Upcoming vehicle actions</h2>
-      <table><thead><tr><th>Vehicle</th><th>Action</th><th>Due</th><th>Priority</th></tr></thead><tbody>
-        {vehicles.slice(0,4).map((vehicle,index)=><tr key={vehicle.id}><td>{vehicle.make} {vehicle.model} · {vehicle.plateNumber}</td><td>{index%2 ? "Insurance renewal" : "Routine service"}</td><td>{new Date(Date.now()+(index+2)*86400000*7).toLocaleDateString("en-LR")}</td><td>{index<2 ? "Due soon" : "Scheduled"}</td></tr>)}
-      </tbody></table>
-    </section>
-    <section className="panel"><div className="toolbar"><div><span className="eyebrow">Reports</span><h2>Fleet performance</h2></div><button className="action secondary">Export monthly report</button></div>
-      <div className="grid"><Stat label="Completion rate" value="94%" detail="Last 30 days" /><Stat label="Average driver rating" value="4.8" detail="Across active drivers" /><Stat label="Earnings per vehicle" value={money(138_500)} detail="Monthly average" /></div>
+    <section className="panel"><span className="eyebrow">Reports</span><h2>Fleet performance</h2>
+      <Stat label="Completion rate" value={report?.rides ? `${Math.round(report.completedRides / report.rides * 100)}%` : "No rides"} detail="Last 30 days" />
     </section>
   </Shell>;
 }

@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { apiClient, money } from "@libswiftride/sdk";
 import { Map, Shell, Stat } from "@libswiftride/ui";
 import "@libswiftride/ui/styles.css";
+import { VehicleProvisioning } from "./vehicle-provisioning.js";
 
 type Overview = {
   activeRides: number;
@@ -235,6 +236,7 @@ function App() {
           <div><button className="action" onClick={() => reviewKyc(kyc.id, "APPROVED")}>Approve</button> <button className="link-button" onClick={() => reviewKyc(kyc.id, "REJECTED")}>Reject</button></div>
         </article>)}
         {!kycCases.length && <p>No submitted driver cases.</p>}
+        <VehicleProvisioning />
       </section>
       <section className="panel">
         <h2>Admin notifications</h2>

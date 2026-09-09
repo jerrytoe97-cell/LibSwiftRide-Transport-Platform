@@ -7,6 +7,17 @@ servers:
   - url: https://api.example.com/api/v1
   - url: http://localhost:4000/api/v1
 components:
+  parameters:
+    ResourceId:
+      in: path
+      name: id
+      required: true
+      schema: { type: string, format: uuid }
+    AccountingKey:
+      in: header
+      name: Idempotency-Key
+      required: true
+      schema: { type: string, minLength: 8, maxLength: 200 }
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
   schemas:
@@ -28,6 +39,150 @@ components:
             message: { type: string }
             details: {}
 paths:
+  /admin/drivers/{id}/vehicle:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Active administrator attests vehicle compliance and assigns an approved driver
+      description: Requires all five clean reviewed KYC documents and future expiry dates. Records an audit and leaves the driver offline for a fresh eligibility check.
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [make, model, year, color, plateNumber, insuranceExpiresAt, inspectionExpiresAt, registrationExpiresAt, evidenceReference]
+              properties:
+                vehicleId: { type: string, format: uuid }
+                fleetId: { type: [string, 'null'], format: uuid }
+                make: { type: string, minLength: 1, maxLength: 80 }
+                model: { type: string, minLength: 1, maxLength: 80 }
+                year: { type: integer, minimum: 1990 }
+                color: { type: string, minLength: 1, maxLength: 40 }
+                plateNumber: { type: string, minLength: 3, maxLength: 30 }
+                insuranceExpiresAt: { type: string, format: date-time }
+                inspectionExpiresAt: { type: string, format: date-time }
+                registrationExpiresAt: { type: string, format: date-time }
+                evidenceReference: { type: string, minLength: 8, maxLength: 200 }
+      responses:
+        '200': { description: Vehicle provisioned and audited }
+        '403': { description: Active administrator required }
+        '409': { description: Driver, vehicle or compliance changed }
+        '422': { description: Required documents or valid inputs missing }
+  /admin/drivers/{id}/cash-collections:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Administrator records an evidenced physical cash commission handover
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/AccountingKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amountMinor, evidence]
+              properties:
+                amountMinor: { type: integer, minimum: 1, maximum: 2147483647 }
+                evidence: { type: string, minLength: 8, maxLength: 500 }
+      responses:
+        '200': { description: Balanced journal recorded or replayed }
+        '403': { description: Active administrator required }
+        '409': { description: Reconciliation or idempotency conflict }
+        '422': { description: Collection exceeds receivable or invalid input }
+  /admin/payouts/{id}/cash-resolution:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Administrator records a physical cash payout or cancels its reservation
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/AccountingKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outcome, evidence]
+              properties:
+                outcome: { type: string, enum: [PAID, CANCELLED] }
+                evidence: { type: string, minLength: 8, maxLength: 500 }
+      responses:
+        '200': { description: Balanced payout or reservation reversal journal }
+        '403': { description: Active administrator required }
+        '409': { description: Final payout or reconciliation conflict }
+        '422': { description: Insufficient recorded company cash or invalid input }
+  /admin/refunds/{id}/cash-completion:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Administrator records approved cash returned by the driver to the passenger
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/AccountingKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [evidence]
+              properties:
+                evidence: { type: string, minLength: 8, maxLength: 500 }
+      responses:
+        '200': { description: Refund and proportional commission reversal recorded }
+        '403': { description: Active administrator required }
+        '409': { description: Refund not approved, cash settlement missing, or replay conflict }
+        '422': { description: Refund exceeds captured amount or invalid evidence }
+  /admin/drivers/{id}/adjustments:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Administrator applies an evidenced payable adjustment against a reviewed balance
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }, { $ref: '#/components/parameters/AccountingKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [deltaMinor, expectedBalanceMinor, evidence]
+              properties:
+                deltaMinor: { type: integer, minimum: -2147483647, maximum: 2147483647, not: { const: 0 } }
+                expectedBalanceMinor: { type: integer }
+                evidence: { type: string, minLength: 8, maxLength: 500 }
+      responses:
+        '200': { description: Balanced adjustment journal }
+        '403': { description: Active administrator required }
+        '409': { description: Balance changed or reconciliation required }
+        '422': { description: Insufficient available funds or invalid input }
+  /admin/adjustments/{id}/reversal:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Administrator reverses a manual adjustment once without changing its original journal
+      description: The original journal identifier is the unique reversal key.
+      parameters: [{ $ref: '#/components/parameters/ResourceId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [evidence]
+              properties:
+                evidence: { type: string, minLength: 8, maxLength: 500 }
+      responses:
+        '200': { description: Balanced reversal journal }
+        '403': { description: Active administrator required }
+        '409': { description: Funds unavailable, currency mismatch, or replay conflict }
+        '422': { description: Unsupported original journal or invalid evidence }
+  /admin/drivers/{id}/reconciliation:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Administrator records a wallet reconciliation snapshot without changing balances
+      parameters:
+        - { $ref: '#/components/parameters/ResourceId' }
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Audit snapshot with discrepancies and missing settlements }
+        '403': { description: Active administrator required }
+        '409': { description: Audit key belongs to another request }
   /users/me:
     get:
       security: [{ bearerAuth: [] }]
