@@ -2,13 +2,17 @@ import { createHash, randomBytes } from "node:crypto";
 import { Router } from "express";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
-import { authenticate, authorize, hashPassword, issueTokens, revokeRefreshToken, rotateRefreshToken, verifyPassword } from "./auth.js";
+import { authenticate, authorize, hashPassword, issueTokens, revokeRefreshToken, revokeSessionFamily, rotateRefreshToken, verifyPassword } from "./auth.js";
 import { config } from "./config.js";
 import { addressQuery, gpsQuery, geocode, GeocodingError } from "./services/geocoding.js";
 import { economyTariff, effectiveSurgeMultiplier, tariffForBookedRide } from "./pricing-config.js";
 import { COMPANY_SHARE_BPS, DRIVER_SHARE_BPS, calculateSplit, prisma, redis } from "./lib.js";
 import { writeAudit } from "./services/audit.js";
 import { rideWalletSettlement } from "./services/ride-wallet-settlement.js";
+import { credit, debit, postJournal, postRideSettlement } from "./services/ledger.js";
+import { cashEvidenceSchema, recordCashCommission, recordDriverCashRefund, resolveCashPayout } from "./services/cash-accounting.js";
+import { adjustmentSchema, adjustDriverPayable, reversePayableAdjustment } from "./services/accounting-adjustments.js";
+import { reconcileDriverWallet } from "./services/reconciliation.js";
 import { matchDriver } from "./services/dispatch.js";
 import { calculateFare, calculatePromoDiscount, demandMultiplierFor } from "./services/fare.js";
 import { markNotificationRead, queueNotification } from "./services/notifications.js";
@@ -29,13 +33,20 @@ import { transactionalEmailContent } from "./services/transactional-email-templa
 import { FinancialOperationError, requestDriverPayout, requestRefund, reviewRefund } from "./services/financial-operations.js";
 import { publicDriver, publicRide } from "./services/public-projections.js";
 import { consumeVerificationToken, lockIdentity } from "./services/verification-tokens.js";
-import { eligibleDriverWhere } from "./services/driver-eligibility.js";
+import { eligibleDriverWhere, lockDriverIdentity } from "./services/driver-eligibility.js";
+import { provisionVehicle } from "./services/vehicle-provisioning.js";
+import { completeKycDocument, submitKyc, reviewKyc } from "./services/kyc-operations.js";
+import { SecurityOperationError } from "./services/security-operation.js";
+import { requireActiveAdministrator } from "./services/active-administrator.js";
 
 import { SafetyOperationError, updateSafetyIncident, escalateSafetyIncident, safetyContact } from "./services/safety-operations.js";
 
 export const api = Router();
 const asyncRoute = (handler: (req: any, res: any) => Promise<unknown>) =>
-  (req: any, res: any, next: any) => Promise.resolve(handler(req, res)).catch(next);
+  (req: any, res: any, next: any) => Promise.resolve(handler(req, res)).catch((error) => {
+    if (error instanceof SecurityOperationError) return res.status(error.status).json({ error: { code: error.code, message: error.message } });
+    return next(error);
+  });
 const financialRoute = (handler: (req: any, res: any) => Promise<unknown>) => asyncRoute(async (req, res) => {
   try { return await handler(req, res); }
   catch (error) {
@@ -163,11 +174,11 @@ api.post("/auth/login", asyncRoute(async (req, res) => {
   if (requiresMfa(user.role)) {
     const credential = await prisma.mfaCredential.findUnique({ where: { userId: user.id }, select: { verifiedAt: true } });
     const type = credential?.verifiedAt ? "MFA_LOGIN" : "MFA_ENROLL";
-    const challengeToken = await createVerificationToken(user.id, type);
+    const challengeToken = await createVerificationToken(user.id, type, user.securityVersion);
     if (type === "MFA_LOGIN") return res.json({ data: { id: user.id, role: user.role }, mfaRequired: true, challengeToken });
     return res.json({ data: { id: user.id, role: user.role }, mfaEnrollmentRequired: true, enrollmentToken: challengeToken });
   }
-  res.json({ data: { id: user.id, role: user.role }, tokens: await issueTokens({ sub: user.id, role: user.role }) });
+  res.json({ data: { id: user.id, role: user.role }, tokens: await issueTokens({ sub: user.id, role: user.role }, undefined, user.securityVersion) });
 }));
 
 api.post("/auth/refresh", asyncRoute(async (req, res) => {
@@ -213,18 +224,20 @@ api.get("/auth/sessions", authenticate, asyncRoute(async (req, res) => {
 }));
 
 api.delete("/auth/sessions/:id", authenticate, asyncRoute(async (req, res) => {
-  const revoked = await prisma.refreshToken.updateMany({ where: { id: req.params.id, userId: req.user!.sub, revokedAt: null }, data: { revokedAt: new Date() } });
-  if (!revoked.count) return res.status(404).json({ error: { code: "SESSION_NOT_FOUND", message: "Session not found" } });
+  const revoked = await revokeSessionFamily(req.user!.sub, req.params.id);
+  if (!revoked) return res.status(404).json({ error: { code: "SESSION_NOT_FOUND", message: "Session not found" } });
   await writeAudit({ actorId: req.user!.sub, action: "SESSION_REVOKED", entityType: "RefreshToken", entityId: req.params.id, ipAddress: req.ip });
   res.status(204).send();
 }));
 
 const tokenDigest = (value: string) => createHash("sha256").update(value).digest("hex");
-async function createVerificationToken(userId: string, type: "EMAIL_VERIFY" | "PASSWORD_RESET" | "MFA_LOGIN" | "MFA_ENROLL") {
+async function createVerificationToken(userId: string, type: "EMAIL_VERIFY" | "PASSWORD_RESET" | "MFA_LOGIN" | "MFA_ENROLL", expectedVersion?: number) {
   const token = randomBytes(32).toString("hex");
   const issuedAt = new Date();
   await prisma.$transaction(async (tx) => {
     await lockIdentity(tx, userId);
+    const current = await tx.user.findUniqueOrThrow({ where: { id: userId } });
+    if (current.status !== "ACTIVE" || (expectedVersion !== undefined && current.securityVersion !== expectedVersion)) throw Object.assign(new Error("Credentials changed"), { status: 401, code: "INVALID_TOKEN" });
     await tx.verificationToken.updateMany({
       where: { userId, type, usedAt: null },
       data: { usedAt: issuedAt }
@@ -276,15 +289,16 @@ api.post("/auth/mfa/enrollment/confirm", asyncRoute(async (req, res) => {
   if (!credential || !verifyTotp(decryptMfaSecret(credential.encryptedSecret, mfaKey()), input.code)) {
     return res.status(401).json({ error: { code: "INVALID_MFA_CODE", message: "The authenticator code is incorrect" } });
   }
-  await prisma.$transaction(async (tx) => {
+  const tokens = await prisma.$transaction(async (tx) => {
     await lockIdentity(tx, record.userId);
     await consumeVerificationToken(tx, record.id, "MFA_ENROLL");
     const changed = await tx.mfaCredential.updateMany({ where: { id: credential.id, encryptedSecret: credential.encryptedSecret, verifiedAt: null }, data: { verifiedAt: new Date() } });
     if (changed.count !== 1) throw Object.assign(new Error("MFA enrollment changed"), { status: 401, code: "INVALID_MFA_ENROLLMENT" });
     await tx.refreshToken.updateMany({ where: { userId: record.userId, revokedAt: null }, data: { revokedAt: new Date() } });
+    return issueTokens({ sub: record.user.id, role: record.user.role, mfa: true }, tx, record.user.securityVersion);
   });
   await writeAudit({ actorId: record.userId, action: "MFA_ENABLED", entityType: "User", entityId: record.userId, ipAddress: req.ip });
-  res.json({ data: { id: record.user.id, role: record.user.role }, tokens: await issueTokens({ sub: record.user.id, role: record.user.role, mfa: true }) });
+  res.json({ data: { id: record.user.id, role: record.user.role }, tokens });
 }));
 
 api.post("/auth/mfa/challenge", asyncRoute(async (req, res) => {
@@ -297,8 +311,11 @@ api.post("/auth/mfa/challenge", asyncRoute(async (req, res) => {
   const recoveryIndex = hashes.indexOf(submittedRecoveryHash);
   const valid = verifyTotp(decryptMfaSecret(credential.encryptedSecret, mfaKey()), input.code) || recoveryIndex >= 0;
   if (!valid) return res.status(401).json({ error: { code: "INVALID_MFA_CODE", message: "The authenticator or recovery code is incorrect" } });
-  await prisma.$transaction(async (tx) => {
+  const tokens = await prisma.$transaction(async (tx) => {
+    await lockIdentity(tx, record.userId);
     await consumeVerificationToken(tx, record.id, "MFA_LOGIN");
+    const lockedCredential = await tx.mfaCredential.findUniqueOrThrow({ where: { id: credential.id } });
+    if (!lockedCredential.verifiedAt || lockedCredential.encryptedSecret !== credential.encryptedSecret) throw Object.assign(new Error("MFA credential changed"), { status: 401, code: "INVALID_MFA_CODE" });
     if (recoveryIndex >= 0) {
       const current = await tx.mfaCredential.findUniqueOrThrow({ where: { id: credential.id } });
       const currentHashes = z.array(z.string()).parse(current.recoveryCodeHashes);
@@ -306,9 +323,10 @@ api.post("/auth/mfa/challenge", asyncRoute(async (req, res) => {
       if (currentIndex < 0) throw Object.assign(new Error("Recovery code was already used"), { code: "INVALID_MFA_CODE" });
       await tx.mfaCredential.update({ where: { id: credential.id }, data: { recoveryCodeHashes: currentHashes.filter((_, index) => index !== currentIndex) } });
     }
-  }, { isolationLevel: "Serializable" });
+    return issueTokens({ sub: record.user.id, role: record.user.role, mfa: true }, tx, record.user.securityVersion);
+  });
   await writeAudit({ actorId: record.userId, action: recoveryIndex >= 0 ? "MFA_RECOVERY_LOGIN" : "MFA_LOGIN", entityType: "User", entityId: record.userId, ipAddress: req.ip });
-  res.json({ data: { id: record.user.id, role: record.user.role }, tokens: await issueTokens({ sub: record.user.id, role: record.user.role, mfa: true }) });
+  res.json({ data: { id: record.user.id, role: record.user.role }, tokens });
 }));
 
 api.get("/auth/mfa/status", authenticate, asyncRoute(async (req, res) => {
@@ -325,7 +343,12 @@ api.post("/auth/mfa/recovery-codes", authenticate, asyncRoute(async (req, res) =
     return res.status(401).json({ error: { code: "INVALID_MFA_CODE", message: "The authenticator code is incorrect" } });
   }
   const recoveryCodes = generateRecoveryCodes();
-  await prisma.mfaCredential.update({ where: { id: credential.id }, data: { recoveryCodeHashes: recoveryCodes.map(recoveryCodeHash) } });
+  await prisma.$transaction(async (tx) => {
+    await lockIdentity(tx, req.user!.sub);
+    const current = await tx.mfaCredential.findUniqueOrThrow({ where: { id: credential.id } });
+    if (!current.verifiedAt || current.encryptedSecret !== credential.encryptedSecret) throw Object.assign(new Error("MFA credential changed"), { status: 401, code: "INVALID_MFA_CODE" });
+    await tx.mfaCredential.update({ where: { id: credential.id }, data: { recoveryCodeHashes: recoveryCodes.map(recoveryCodeHash) } });
+  });
   await writeAudit({ actorId: req.user!.sub, action: "MFA_RECOVERY_CODES_ROTATED", entityType: "User", entityId: req.user!.sub, ipAddress: req.ip });
   res.setHeader("cache-control", "no-store");
   res.json({ data: { recoveryCodes } });
@@ -374,7 +397,7 @@ api.post("/auth/password-reset/confirm", asyncRoute(async (req, res) => {
     const user = await tx.user.findUniqueOrThrow({ where: { id: record.userId } });
     if (!user.emailVerifiedAt || user.status !== "ACTIVE") throw Object.assign(new Error("Recovery is unavailable"), { status: 400, code: "INVALID_TOKEN" });
     await consumeVerificationToken(tx, record.id, "PASSWORD_RESET");
-    await tx.user.update({ where: { id: record.userId }, data: { passwordHash } });
+    await tx.user.update({ where: { id: record.userId }, data: { passwordHash, securityVersion: { increment: 1 } } });
     await tx.verificationToken.updateMany({ where: { userId: record.userId, usedAt: null }, data: { usedAt: new Date() } });
     await tx.refreshToken.updateMany({ where: { userId: record.userId, revokedAt: null }, data: { revokedAt: new Date() } });
     await tx.notification.create({ data: { userId: record.userId, channel: "EMAIL", ...securityAlert } });
@@ -680,6 +703,7 @@ api.post("/rides/:id/transitions", authenticate, authorize("PASSENGER", "DRIVER"
   if (req.user!.role !== "ADMIN" && ((input.tollMinor !== undefined && input.tollMinor !== ride.tollMinor) || (input.waitingTimeSec !== undefined && input.waitingTimeSec !== ride.waitingTimeSec))) return res.status(403).json({ error: { code: "FARE_ADJUSTMENT_FORBIDDEN", message: "Fare adjustments require administrator review" } });
   if (driverAction && ride.driver?.userId !== req.user!.sub && req.user!.role !== "ADMIN") return res.status(403).json({ error: { code: "DRIVER_REQUIRED", message: "Only the assigned driver can perform this transition" } });
   if (status === "PASSENGER_BOARDED" && ride.passengerId !== req.user!.sub && req.user!.role !== "ADMIN") return res.status(403).json({ error: { code: "PASSENGER_REQUIRED", message: "Only the passenger can confirm boarding" } });
+  if (status === "COMPLETED" && ride.paymentMethod !== "CASH" && !config.PAYMENTS_ENABLED) return res.status(503).json({ error: { code: "PAYMENTS_DISABLED", message: "Electronic settlement is disabled pending provider certification" } });
   if (status === "COMPLETED" && ride.paymentMethod !== "CASH" && ride.payment?.status !== "CAPTURED") return res.status(409).json({ error: { code: "PAYMENT_NOT_CONFIRMED", message: "Electronic payment must be confirmed before completion" } });
   const finalPricing = status === "COMPLETED" ? (() => {
     const { subtotalMinor: _subtotalMinor, ...persistedPricing } = calculateFare({
@@ -720,9 +744,14 @@ api.post("/rides/:id/transitions", authenticate, authorize("PASSENGER", "DRIVER"
     if (status === "COMPLETED" && ride.driver) {
       const earningsMinor = finalPricing!.driverEarningsMinor;
       if (ride.paymentMethod === "CASH") {
+        await tx.$queryRaw`SELECT id FROM "Payment" WHERE "rideId" = ${ride.id} FOR UPDATE`;
+        const existingPayment = await tx.payment.findUnique({ where: { rideId: ride.id } });
+        if (existingPayment && (existingPayment.method !== "CASH" || existingPayment.provider !== "CASH" || existingPayment.currency !== ride.currency || !["PENDING", "CAPTURED"].includes(existingPayment.status) || (existingPayment.status === "CAPTURED" && existingPayment.amountMinor !== finalPricing!.fareMinor))) throw new SecurityOperationError(409, "PAYMENT_CONFLICT", "Existing payment cannot be captured as this cash settlement");
         await tx.payment.upsert({ where: { rideId: ride.id }, update: { amountMinor: finalPricing!.fareMinor, status: "CAPTURED", capturedAt: now }, create: { rideId: ride.id, provider: "CASH", providerRef: `cash:${ride.id}`, idempotencyKey: `cash:${ride.id}`, amountMinor: finalPricing!.fareMinor, currency: ride.currency, method: "CASH", status: "CAPTURED", capturedAt: now } });
       }
       const wallet = await tx.wallet.upsert({ where: { userId: ride.driver.userId }, update: {}, create: { userId: ride.driver.userId } });
+      if (wallet.currency !== ride.currency) throw new SecurityOperationError(409, "CURRENCY_MISMATCH", "Ride and driver wallet currencies must match");
+      await postRideSettlement(tx, { rideId: ride.id, driverUserId: ride.driver.userId, actorId: req.user!.sub, currency: ride.currency, cash: ride.paymentMethod === "CASH", fareMinor: finalPricing!.fareMinor, driverMinor: earningsMinor, companyMinor: finalPricing!.companyCommissionMinor });
       const settlement = rideWalletSettlement(ride.paymentMethod, finalPricing!.fareMinor, earningsMinor);
       if (settlement.amountMinor > 0) {
         const settledWallet = await tx.wallet.update({ where: { id: wallet.id }, data: { balanceMinor: { increment: settlement.deltaMinor } } });
@@ -735,6 +764,7 @@ api.post("/rides/:id/transitions", authenticate, authorize("PASSENGER", "DRIVER"
           const existingAward = await tx.driverIncentive.findUnique({ where: { programId_driverId: { programId: program.id, driverId: ride.driver.id } } });
           if (!existingAward) {
             await tx.driverIncentive.create({ data: { programId: program.id, driverId: ride.driver.id, rideCount, amountMinor: program.bonusMinor } });
+            if (program.bonusMinor > 0) await postJournal(tx, { idempotencyKey: `incentive:${program.id}:${ride.driver.id}`, kind: "INCENTIVE_EXPENSE", reference: ride.id, currency: ride.currency, actorId: req.user!.sub, evidence: `qualified-incentive:${program.id}`, lines: [debit("INCENTIVE_EXPENSE", "platform", program.bonusMinor), credit("USER_PAYABLE", ride.driver.userId, program.bonusMinor)] });
             const latestWallet = await tx.wallet.findUniqueOrThrow({ where: { id: wallet.id } });
             await tx.wallet.update({ where: { id: wallet.id }, data: { balanceMinor: { increment: program.bonusMinor }, transactions: { create: { type: "CREDIT", amountMinor: program.bonusMinor, balanceMinor: latestWallet.balanceMinor + program.bonusMinor, reference: `incentive:${program.id}:${ride.driver.id}`, idempotencyKey: `incentive:${program.id}:${ride.driver.id}`, description: `Driver incentive: ${program.name}` } } } });
           }
@@ -750,6 +780,8 @@ api.post("/rides/:id/transitions", authenticate, authorize("PASSENGER", "DRIVER"
         const claimed = await tx.referral.updateMany({ where: { id: referral.id, status: "PENDING" }, data: { status: "REWARDED", rewardMinor: referralRewardMinor, qualifiedAt: now, rewardedAt: now } });
         if (claimed.count !== 1) throw Object.assign(new Error("Referral qualification changed"), { code: "RIDE_CONFLICT" });
         const referrerWallet = await tx.wallet.upsert({ where: { userId: referral.referrerId }, update: {}, create: { userId: referral.referrerId } });
+        if (referrerWallet.currency !== ride.currency) throw new SecurityOperationError(409, "CURRENCY_MISMATCH", "Referral wallet currency must match the ride");
+        if (referralRewardMinor > 0) await postJournal(tx, { idempotencyKey: `referral-reward:${referral.id}`, kind: "REFERRAL_EXPENSE", reference: ride.id, currency: ride.currency, actorId: req.user!.sub, evidence: `one-time-first-ride:${referral.id}`, lines: [debit("REFERRAL_EXPENSE", "platform", referralRewardMinor), credit("USER_PAYABLE", referral.referrerId, referralRewardMinor)] });
         const credited = await tx.wallet.update({ where: { id: referrerWallet.id }, data: { balanceMinor: { increment: referralRewardMinor } } });
         await tx.walletTransaction.create({ data: { walletId: credited.id, type: "CREDIT", amountMinor: referralRewardMinor, balanceMinor: credited.balanceMinor, reference: `referral:${referral.id}`, idempotencyKey: `referral-reward:${referral.id}`, description: "First-ride referral funded from company commission", metadata: { rideId: ride.id, grossCommissionMinor: finalPricing!.companyCommissionMinor, companyNetMinor: finalPricing!.companyCommissionMinor - referralRewardMinor } } });
         await tx.rideEvent.create({ data: { rideId: ride.id, type: "REFERRAL_COMMISSION_ALLOCATED", metadata: { referralId: referral.id, rewardMinor: referralRewardMinor, companyNetMinor: finalPricing!.companyCommissionMinor - referralRewardMinor } } });
@@ -775,6 +807,7 @@ api.post("/drivers/rides/:id/accept", authenticate, authorize("DRIVER"), asyncRo
   const driver = await prisma.driver.findUnique({ where: { userId: req.user!.sub }, select: { id: true } });
   if (!driver) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Driver profile not found" } });
   const accepted = await prisma.$transaction(async (tx) => {
+    await lockIdentity(tx, req.user!.sub);
     const claimed = await tx.ride.updateMany({
       where: { id: req.params.id, driverId: driver.id, status: "DRIVER_ASSIGNED", driver: { is: { ...eligibleDriverWhere(), status: "ON_TRIP" } }, offers: { some: { driverId: driver.id, status: "OFFERED", offeredAt: { gt: new Date(Date.now() - 60_000) } } } },
       data: { status: "DRIVER_ARRIVING", acceptedAt: new Date() }
@@ -1044,6 +1077,37 @@ api.post("/admin/drivers/:id/payouts", authenticate, authorize("ADMIN"), financi
   res.status(201).json({ data: payout });
 }));
 
+const cashJournalResponse = (journal: { id: string; kind: string; reference: string; currency: string; createdAt: Date }) => ({ id: journal.id, kind: journal.kind, reference: journal.reference, currency: journal.currency, createdAt: journal.createdAt });
+api.post("/admin/drivers/:id/reconciliation", authenticate, authorize("ADMIN"), financialRoute(async (req, res) => {
+  const result = await reconcileDriverWallet({ actorId: req.user!.sub, driverId: z.uuid().parse(req.params.id), idempotencyKey: z.uuid().parse(req.header("idempotency-key")) });
+  res.json({ data: result });
+}));
+api.post("/admin/drivers/:id/adjustments", authenticate, authorize("ADMIN"), financialRoute(async (req, res) => {
+  const input = adjustmentSchema.parse({ ...req.body, driverId: req.params.id, idempotencyKey: req.header("idempotency-key") });
+  const journal = await adjustDriverPayable({ ...input, actorId: req.user!.sub });
+  res.json({ data: cashJournalResponse(journal) });
+}));
+api.post("/admin/adjustments/:id/reversal", authenticate, authorize("ADMIN"), financialRoute(async (req, res) => {
+  const input = z.object({ evidence: z.string().trim().min(8).max(500) }).parse(req.body);
+  const journal = await reversePayableAdjustment({ ...input, actorId: req.user!.sub, journalId: z.uuid().parse(req.params.id) });
+  res.json({ data: cashJournalResponse(journal) });
+}));
+api.post("/admin/drivers/:id/cash-collections", authenticate, authorize("ADMIN"), financialRoute(async (req, res) => {
+  const input = cashEvidenceSchema.extend({ amountMinor: z.number().int().positive().max(2_147_483_647) }).parse({ ...req.body, idempotencyKey: req.header("idempotency-key") });
+  const journal = await recordCashCommission({ ...input, actorId: req.user!.sub, driverId: z.uuid().parse(req.params.id) });
+  res.json({ data: cashJournalResponse(journal) });
+}));
+api.post("/admin/payouts/:id/cash-resolution", authenticate, authorize("ADMIN"), financialRoute(async (req, res) => {
+  const input = cashEvidenceSchema.extend({ outcome: z.enum(["PAID", "CANCELLED"]) }).parse({ ...req.body, idempotencyKey: req.header("idempotency-key") });
+  const journal = await resolveCashPayout({ ...input, actorId: req.user!.sub, payoutId: z.uuid().parse(req.params.id) });
+  res.json({ data: cashJournalResponse(journal) });
+}));
+api.post("/admin/refunds/:id/cash-completion", authenticate, authorize("ADMIN"), financialRoute(async (req, res) => {
+  const input = cashEvidenceSchema.parse({ ...req.body, idempotencyKey: req.header("idempotency-key") });
+  const journal = await recordDriverCashRefund({ ...input, actorId: req.user!.sub, refundId: z.uuid().parse(req.params.id) });
+  res.json({ data: cashJournalResponse(journal) });
+}));
+
 api.get("/notifications", authenticate, asyncRoute(async (req, res) => {
   const limit = z.coerce.number().int().min(1).max(100).default(25).parse(req.query.limit);
   const unreadOnly = z.enum(["true", "false"]).default("false").transform((value) => value === "true").parse(req.query.unreadOnly);
@@ -1135,18 +1199,15 @@ api.post("/drivers/kyc/uploads/complete", authenticate, authorize("DRIVER"), asy
     await writeAudit({ actorId: req.user!.sub, action: "KYC_DOCUMENT_SCAN_REJECTED", entityType: "KycCase", entityId: driver.kycCase.id, ipAddress: req.ip, metadata: { type: input.type, reason: typeof error === "object" && error && "code" in error ? String(error.code) : "KYC_SCAN_FAILED" } });
     throw error;
   }
-  const previous = await prisma.kycDocument.findUnique({ where: { kycCaseId_type: { kycCaseId: driver.kycCase.id, type: input.type } } });
-  const document = await prisma.kycDocument.upsert({
-    where: { kycCaseId_type: { kycCaseId: driver.kycCase.id, type: input.type } },
-    update: { storageKey: verified.storageKey, mimeType: input.mimeType, sizeBytes: input.sizeBytes, checksum: verified.checksum, scanStatus: verified.scanStatus, scannedAt: verified.scannedAt, verifiedAt: null },
-    create: { kycCaseId: driver.kycCase.id, type: input.type, storageKey: verified.storageKey, mimeType: input.mimeType, sizeBytes: input.sizeBytes, checksum: verified.checksum, scanStatus: verified.scanStatus, scannedAt: verified.scannedAt }
+  const { previous, document } = await completeKycDocument({
+    userId: req.user!.sub, caseId: driver.kycCase.id, type: input.type,
+    storageKey: verified.storageKey, mimeType: input.mimeType, sizeBytes: input.sizeBytes, checksum: verified.checksum, scannedAt: verified.scannedAt
   }).catch(async (error) => {
     await deleteKycObject(verified.storageKey).catch(() => undefined);
     throw error;
   });
   if (previous && previous.storageKey !== verified.storageKey) await deleteKycObject(previous.storageKey).catch((error) => logger.warn({ err: error, documentId: previous.id }, "superseded KYC object cleanup failed"));
   await writeAudit({ actorId: req.user!.sub, action: "KYC_DOCUMENT_SCANNED", entityType: "KycDocument", entityId: document.id, ipAddress: req.ip, metadata: { type: input.type, scanStatus: verified.scanStatus, scannerProvider: config.KYC_SCANNER_PROVIDER } });
-  await writeAudit({ actorId: req.user!.sub, action: "KYC_DOCUMENT_UPLOADED", entityType: "KycDocument", entityId: document.id, ipAddress: req.ip, metadata: { type: input.type, sizeBytes: input.sizeBytes, scanStatus: verified.scanStatus } });
   res.json({ data: { id: document.id, type: document.type, sizeBytes: document.sizeBytes, scanStatus: document.scanStatus, createdAt: document.createdAt } });
 }));
 
@@ -1157,7 +1218,7 @@ api.post("/drivers/kyc/submit", authenticate, authorize("DRIVER"), asyncRoute(as
   const required = ["DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "PROFILE_PHOTO"];
   const clean = new Set(driver.kycCase.documents.filter((document) => document.scanStatus === "CLEAN").map((document) => document.type));
   if (required.some((type) => !clean.has(type as any))) return res.status(422).json({ error: { code: "KYC_DOCUMENTS_REQUIRED", message: "All five required documents must upload and pass scanning" } });
-  const submitted = await prisma.kycCase.update({ where: { id: driver.kycCase.id }, data: { status: "SUBMITTED", submittedAt: new Date(), rejectionCode: null, rejectionNotes: null } });
+  const { submitted } = await submitKyc(req.user!.sub);
   const applicationReceived = transactionalEmailContent({ template: "driver-application-received" });
   await Promise.all([
     queueNotification({ userId: req.user!.sub, channel: "IN_APP", ...applicationReceived }),
@@ -1178,14 +1239,7 @@ api.post("/admin/kyc/:id/review", authenticate, authorize("ADMIN"), asyncRoute(a
   if (!existing || !["SUBMITTED", "UNDER_REVIEW"].includes(existing.status)) return res.status(409).json({ error: { code: "KYC_NOT_REVIEWABLE", message: "KYC case is not reviewable" } });
   const requiredDocuments = ["DRIVER_LICENSE", "VEHICLE_REGISTRATION", "INSURANCE", "INSPECTION", "PROFILE_PHOTO"];
   if (input.decision === "APPROVED" && requiredDocuments.some((type) => !existing.documents.some((document) => document.type === type && document.scanStatus === "CLEAN"))) return res.status(422).json({ error: { code: "KYC_DOCUMENTS_NOT_CLEAN", message: "All required documents must pass scanning before approval" } });
-  const result = await prisma.$transaction(async (tx) => {
-    const claimed = await tx.kycCase.updateMany({ where: { id: existing.id, status: { in: ["SUBMITTED", "UNDER_REVIEW"] } }, data: { status: input.decision, reviewerId: req.user!.sub, reviewedAt: new Date(), rejectionCode: input.rejectionCode ?? null, rejectionNotes: input.rejectionNotes ?? null } });
-    if (claimed.count !== 1) return null;
-    await tx.driver.update({ where: { id: existing.driverId }, data: input.decision === "APPROVED" ? { verifiedAt: new Date(), approvedById: req.user!.sub, onboardingStep: "COMPLETE" } : { verifiedAt: null, onboardingStep: "DOCUMENTS" } });
-    return tx.kycCase.findUniqueOrThrow({ where: { id: existing.id } });
-  });
-  if (!result) return res.status(409).json({ error: { code: "KYC_REVIEW_CONFLICT", message: "This verification was already reviewed" } });
-  await writeAudit({ actorId: req.user!.sub, action: `KYC_${input.decision}`, entityType: "KycCase", entityId: existing.id, ipAddress: req.ip, ...(input.rejectionCode ? { metadata: { rejectionCode: input.rejectionCode } } : {}) });
+  const { result } = await reviewKyc({ caseId: existing.id, actorId: req.user!.sub, ...input });
   const reviewNotice = input.decision === "APPROVED"
     ? transactionalEmailContent({ template: "kyc-approved" })
     : transactionalEmailContent({ template: "kyc-rejected", ...(input.rejectionNotes ? { reason: input.rejectionNotes } : {}) });
@@ -1233,6 +1287,11 @@ api.post("/admin/notifications", authenticate, authorize("ADMIN"), asyncRoute(as
   res.status(202).json({ data: { recipients: recipients.length, notifications: rows.length } });
 }));
 
+api.post("/admin/drivers/:id/vehicle", authenticate, authorize("ADMIN"), asyncRoute(async (req, res) => {
+  const driverId = z.uuid().parse(req.params.id);
+  res.json({ data: await provisionVehicle(driverId, req.user!.sub, req.body) });
+}));
+
 api.post("/fleet/vehicles", authenticate, authorize("FLEET_MANAGER", "ADMIN"), asyncRoute(async (req, res) => {
   const input = z.object({ fleetId: z.uuid(), make: z.string(), model: z.string(), year: z.number().int().min(1990).max(2030), color: z.string(), plateNumber: z.string().min(3) }).parse(req.body);
   const fleet = await prisma.fleet.findUnique({ where: { id: input.fleetId } });
@@ -1271,17 +1330,26 @@ api.patch("/dispatch/drivers/:id/status", authenticate, authorize("DISPATCHER", 
   const existing = await prisma.driver.findUnique({ where: { id: req.params.id } });
   if (!existing) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Driver not found" } });
   if (existing.status === "ON_TRIP") return res.status(409).json({ error: { code: "ACTIVE_TRIP", message: "An active-trip driver cannot be changed" } });
-  const driver = await prisma.driver.update({ where: { id: existing.id }, data: { status } });
-  await writeAudit({ actorId: req.user!.sub, action: `DRIVER_${status}`, entityType: "Driver", entityId: driver.id, ipAddress: req.ip });
+  const driver = await prisma.$transaction(async (tx) => {
+    await lockIdentity(tx, existing.userId);
+    const changed = await tx.driver.updateMany({ where: { id: existing.id, status: { not: "ON_TRIP" } }, data: { status } });
+    if (!changed.count) throw new SecurityOperationError(409, "ACTIVE_TRIP", "An active-trip driver cannot be changed");
+    await tx.auditLog.create({ data: { actorId: req.user!.sub, action: `DRIVER_${status}`, entityType: "Driver", entityId: existing.id } });
+    return tx.driver.findUniqueOrThrow({ where: { id: existing.id } });
+  });
   res.json({ data: { id: driver.id, status: driver.status } });
 }));
 
 api.post("/dispatch/rides/:id/assign", authenticate, authorize("DISPATCHER", "ADMIN"), asyncRoute(async (req, res) => {
   const driverId = z.object({ driverId: z.uuid() }).parse(req.body).driverId;
   const assigned = await prisma.$transaction(async (tx) => {
+    await lockDriverIdentity(tx, driverId);
     const driver = await tx.driver.updateMany({ where: { id: driverId, status: "AVAILABLE", ...eligibleDriverWhere() }, data: { status: "ON_TRIP" } });
-    if (!driver.count) throw new Error("Driver is unavailable or unverified");
-    const ride = await tx.ride.update({ where: { id: req.params.id, status: "SEARCHING" }, data: { driverId, status: "DRIVER_ASSIGNED", events: { create: { type: "DRIVER_ASSIGNED_MANUALLY", actorId: req.user!.sub, metadata: { driverId } } } } });
+    if (!driver.count) throw new SecurityOperationError(409, "DRIVER_NOT_READY", "Driver is unavailable or lacks current verified compliance");
+    const claimed = await tx.ride.updateMany({ where: { id: req.params.id, status: "SEARCHING", driverId: null }, data: { driverId, status: "DRIVER_ASSIGNED" } });
+    if (!claimed.count) throw new SecurityOperationError(409, "RIDE_CONFLICT", "Ride is no longer available for assignment");
+    const ride = await tx.ride.findUniqueOrThrow({ where: { id: req.params.id } });
+    await tx.rideEvent.create({ data: { rideId: ride.id, type: "DRIVER_ASSIGNED_MANUALLY", actorId: req.user!.sub, metadata: { driverId } } });
     await tx.rideOffer.upsert({ where: { rideId_driverId: { rideId: ride.id, driverId } }, update: { status: "OFFERED", offeredAt: new Date(), respondedAt: null }, create: { rideId: ride.id, driverId } });
     await tx.auditLog.create({ data: { actorId: req.user!.sub, action: "RIDE_ASSIGNED", entityType: "Ride", entityId: ride.id, metadata: { driverId } } });
     return ride;
@@ -1355,9 +1423,14 @@ api.patch("/admin/passengers/:id/status", authenticate, authorize("ADMIN"), asyn
   const status = z.object({ status: z.enum(["ACTIVE", "SUSPENDED", "DEACTIVATED"]) }).parse(req.body).status;
   const passenger = await prisma.user.findFirst({ where: { id: req.params.id, role: "PASSENGER" } });
   if (!passenger) return res.status(404).json({ error: { code: "PASSENGER_NOT_FOUND", message: "Passenger not found" } });
-  const updated = await prisma.user.update({ where: { id: passenger.id }, data: { status } });
-  if (status !== "ACTIVE") await prisma.refreshToken.updateMany({ where: { userId: passenger.id, revokedAt: null }, data: { revokedAt: new Date() } });
-  await writeAudit({ actorId: req.user!.sub, action: `PASSENGER_${status}`, entityType: "User", entityId: passenger.id, ipAddress: req.ip });
+  const updated = await prisma.$transaction(async (tx) => {
+    await lockIdentity(tx, passenger.id);
+    const changed = await tx.user.update({ where: { id: passenger.id, role: "PASSENGER" }, data: { status, securityVersion: { increment: 1 } } });
+    await tx.refreshToken.updateMany({ where: { userId: passenger.id, revokedAt: null }, data: { revokedAt: new Date() } });
+    await tx.verificationToken.updateMany({ where: { userId: passenger.id, usedAt: null }, data: { usedAt: new Date() } });
+    await tx.auditLog.create({ data: { actorId: req.user!.sub, action: `PASSENGER_${status}`, entityType: "User", entityId: passenger.id, ipAddress: req.ip } });
+    return changed;
+  });
   res.json({ data: { id: updated.id, status: updated.status } });
 }));
 
@@ -1456,9 +1529,12 @@ api.post("/drivers/me/availability", authenticate, authorize("DRIVER"), asyncRou
   if (!driver) return res.status(404).json({ error: { code: "DRIVER_NOT_FOUND", message: "Driver profile not found" } });
   if (status === "AVAILABLE" && (!driver.verifiedAt || driver.kycCase?.status !== "APPROVED" || !driver.vehicle?.active)) return res.status(422).json({ error: { code: "DRIVER_NOT_READY", message: "Approved verification and an active vehicle are required" } });
   if (["ON_TRIP", "SUSPENDED"].includes(driver.status)) return res.status(409).json({ error: { code: "DRIVER_LOCKED", message: "Availability cannot change during a trip or suspension" } });
-  const changed = await prisma.driver.updateMany({ where: { id: driver.id, status: { in: ["OFFLINE", "AVAILABLE"] }, ...(status === "AVAILABLE" ? eligibleDriverWhere() : {}) }, data: { status } });
-  if (changed.count !== 1) return res.status(409).json({ error: { code: "DRIVER_NOT_READY", message: "Driver eligibility changed; approved KYC and current vehicle compliance are required" } });
-  const updated = await prisma.driver.findUniqueOrThrow({ where: { id: driver.id } });
+  const updated = await prisma.$transaction(async (tx) => {
+    await lockIdentity(tx, req.user!.sub);
+    const changed = await tx.driver.updateMany({ where: { id: driver.id, status: { in: ["OFFLINE", "AVAILABLE"] }, ...(status === "AVAILABLE" ? eligibleDriverWhere() : {}) }, data: { status } });
+    if (changed.count !== 1) throw new SecurityOperationError(409, "DRIVER_NOT_READY", "Approved KYC, reviewed documents and current vehicle compliance are required");
+    return tx.driver.findUniqueOrThrow({ where: { id: driver.id } });
+  });
   res.json({ data: updated });
 }));
 
@@ -1541,21 +1617,33 @@ api.patch("/corporate/employees/:id", authenticate, authorize("BUSINESS_MANAGER"
   res.json({ data: updated });
 }));
 
-api.post("/fleet/drivers", authenticate, authorize("FLEET_MANAGER", "ADMIN"), asyncRoute(async (req, res) => {
-  const input = z.object({ fleetId: z.uuid(), driverId: z.uuid() }).parse(req.body);
-  const fleet = await prisma.fleet.findFirst({ where: { id: input.fleetId, ...(req.user!.role === "ADMIN" ? {} : { managerId: req.user!.sub }) } });
-  if (!fleet) return res.status(404).json({ error: { code: "FLEET_NOT_FOUND", message: "Fleet not found" } });
-  const assigned = await prisma.driver.updateMany({ where: { id: input.driverId, fleetId: null, status: { not: "ON_TRIP" } }, data: { fleetId: fleet.id } });
-  if (!assigned.count) return res.status(409).json({ error: { code: "DRIVER_UNAVAILABLE", message: "Driver is already assigned or on a trip" } });
-  await writeAudit({ actorId: req.user!.sub, action: "FLEET_DRIVER_ASSIGNED", entityType: "Driver", entityId: input.driverId, ipAddress: req.ip, metadata: { fleetId: fleet.id } });
-  res.status(201).json({ data: { fleetId: fleet.id, driverId: input.driverId } });
+api.post("/fleet/drivers", authenticate, authorize("ADMIN"), asyncRoute(async (req, res) => {
+  const input = z.object({ fleetId: z.uuid(), driverId: z.uuid(), evidenceReference: z.string().trim().min(8).max(200) }).parse(req.body);
+  await prisma.$transaction(async (tx) => {
+    await lockDriverIdentity(tx, input.driverId);
+    await requireActiveAdministrator(tx, req.user!.sub);
+    const fleet = await tx.fleet.findUnique({ where: { id: input.fleetId } });
+    if (!fleet) throw new SecurityOperationError(404, "FLEET_NOT_FOUND", "Fleet not found");
+    const assigned = await tx.driver.updateMany({ where: { id: input.driverId, fleetId: null, status: { in: ["OFFLINE", "AVAILABLE"] }, user: { status: "ACTIVE", role: "DRIVER" } }, data: { fleetId: fleet.id, status: "OFFLINE" } });
+    if (!assigned.count) throw new SecurityOperationError(409, "DRIVER_UNAVAILABLE", "Driver is already assigned, inactive or on a trip");
+    await tx.vehicle.updateMany({ where: { driverId: input.driverId }, data: { complianceVerifiedAt: null, complianceVerifiedById: null } });
+    await tx.auditLog.create({ data: { actorId: req.user!.sub, action: "FLEET_DRIVER_ASSIGNED", entityType: "Driver", entityId: input.driverId, metadata: { fleetId: fleet.id, evidenceReference: input.evidenceReference, complianceReviewRequired: true } } });
+  });
+  res.status(201).json({ data: { fleetId: input.fleetId, driverId: input.driverId } });
 }));
 
 api.delete("/fleet/drivers/:id", authenticate, authorize("FLEET_MANAGER", "ADMIN"), asyncRoute(async (req, res) => {
-  const driver = await prisma.driver.findUnique({ where: { id: req.params.id }, include: { fleet: true } });
-  if (!driver?.fleet || driver.status === "ON_TRIP" || (req.user!.role !== "ADMIN" && driver.fleet.managerId !== req.user!.sub)) return res.status(409).json({ error: { code: "DRIVER_CANNOT_BE_REMOVED", message: "Driver is unavailable for removal" } });
-  await prisma.driver.update({ where: { id: driver.id }, data: { fleetId: null } });
-  await writeAudit({ actorId: req.user!.sub, action: "FLEET_DRIVER_REMOVED", entityType: "Driver", entityId: driver.id, ipAddress: req.ip });
+  await prisma.$transaction(async (tx) => {
+    await lockDriverIdentity(tx, z.uuid().parse(req.params.id));
+    await tx.$queryRaw`SELECT id FROM "User" WHERE id = ${req.user!.sub} FOR SHARE`;
+    const actor = await tx.user.findUnique({ where: { id: req.user!.sub }, select: { role: true, status: true } });
+    await tx.$queryRaw`SELECT id FROM "Fleet" WHERE id = (SELECT "fleetId" FROM "Driver" WHERE id = ${req.params.id}) FOR SHARE`;
+    const driver = await tx.driver.findUnique({ where: { id: req.params.id }, include: { fleet: true } });
+    if (!driver?.fleet || driver.status === "ON_TRIP" || actor?.status !== "ACTIVE" || (actor.role !== "ADMIN" && (actor.role !== "FLEET_MANAGER" || driver.fleet.managerId !== req.user!.sub))) throw new SecurityOperationError(409, "DRIVER_CANNOT_BE_REMOVED", "Driver is unavailable for removal");
+    await tx.driver.update({ where: { id: driver.id }, data: { fleetId: null, ...(driver.status !== "SUSPENDED" ? { status: "OFFLINE" } : {}) } });
+    await tx.vehicle.updateMany({ where: { driverId: driver.id }, data: { driverId: null, complianceVerifiedAt: null, complianceVerifiedById: null } });
+    await tx.auditLog.create({ data: { actorId: req.user!.sub, action: "FLEET_DRIVER_REMOVED", entityType: "Driver", entityId: driver.id, metadata: { fleetId: driver.fleet.id } } });
+  });
   res.status(204).send();
 }));
 

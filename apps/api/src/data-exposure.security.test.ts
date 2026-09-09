@@ -10,8 +10,11 @@ const app = express(); app.use(express.json()); app.use("/api/v1", api);
 afterEach(() => vi.restoreAllMocks());
 async function token(role = "PASSENGER") {
   let session: any;
+  vi.spyOn(prisma, "$queryRaw").mockResolvedValue([]);
+  vi.spyOn(prisma, "$transaction").mockImplementation(async (operation: any) => operation(prisma));
+  vi.spyOn(prisma.user, "findUniqueOrThrow").mockResolvedValue({ id: "fictional-owner", role, status: "ACTIVE", securityVersion: 0 } as never);
   vi.spyOn(prisma.refreshToken, "create").mockImplementation((async ({ data }: any) => { session = { ...data, revokedAt: null }; return session; }) as never);
-  vi.spyOn(prisma.refreshToken, "findUnique").mockImplementation((async () => ({ ...session, user: { id: "fictional-owner", role, status: "ACTIVE" } })) as never);
+  vi.spyOn(prisma.refreshToken, "findUnique").mockImplementation((async () => ({ ...session, user: { id: "fictional-owner", role, status: "ACTIVE", securityVersion: 0 } })) as never);
   return (await issueTokens({ sub: "fictional-owner", role, mfa: true })).accessToken;
 }
 const sensitiveDriver = { id: "driver", userId: "driver-user", licenseNumber: "fictional-sensitive-license", nationalIdRef: "fictional-sensitive-identity",

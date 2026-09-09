@@ -6,6 +6,7 @@ import { ZodError } from "zod";
 import { api } from "./routes.js";
 import { issueTokens } from "./auth.js";
 import { prisma } from "./lib.js";
+import { credit, debit, postJournal } from "./services/ledger.js";
 
 const app = express();
 app.use(express.json());
@@ -26,6 +27,7 @@ async function driverFixture(balanceMinor = 1000) {
     walletId: user.wallet!.id, type: "CREDIT", amountMinor: balanceMinor, balanceMinor,
     reference: randomUUID(), idempotencyKey: randomUUID(), description: "Fictional opening test balance", createdAt: new Date("2000-01-01T00:00:00.000Z")
   } });
+  await prisma.$transaction((tx) => postJournal(tx, { idempotencyKey: randomUUID(), kind: "TEST_OPENING_BALANCE", reference: user.id, actorId: "fictional-fixture", currency: "LRD", evidence: "Fictional balanced opening liability for acceptance tests", lines: [debit("ADJUSTMENT_CLEARING", "platform", balanceMinor), credit("USER_PAYABLE", user.id, balanceMinor)] }));
   return { driverId: user.driver!.id, walletId: user.wallet!.id };
 }
 

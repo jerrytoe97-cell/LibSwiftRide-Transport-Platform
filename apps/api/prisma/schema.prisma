@@ -164,6 +164,7 @@ model User {
   email               String?             @unique
   emailVerifiedAt     DateTime?
   passwordHash        String
+  securityVersion     Int                 @default(0)
   firstName           String
   lastName            String
   role                UserRole
@@ -185,6 +186,7 @@ model User {
   ratingsReceived     Rating[]            @relation("RatingSubject")
   notifications       Notification[]
   kycReviews          KycCase[]           @relation("KycReviewer")
+  vehicleComplianceReviews Vehicle[]     @relation("VehicleComplianceReviewer")
   devices             Device[]
   favouritePlaces     FavouritePlace[]
   emergencyContacts   EmergencyContact[]
@@ -225,6 +227,7 @@ model VerificationToken {
 
 model RefreshToken {
   id        String    @id @default(uuid())
+  familyId  String    @default(uuid())
   tokenHash String    @unique
   userId    String
   expiresAt DateTime
@@ -233,6 +236,7 @@ model RefreshToken {
   createdAt DateTime  @default(now())
 
   @@index([userId, expiresAt])
+  @@index([familyId, revokedAt])
 }
 
 model Fleet {
@@ -286,6 +290,9 @@ model Vehicle {
   inspectionExpiresAt   DateTime?
   insuranceExpiresAt    DateTime?
   registrationExpiresAt DateTime?
+  complianceVerifiedAt DateTime?
+  complianceVerifiedById String?
+  complianceVerifiedBy User? @relation("VehicleComplianceReviewer", fields: [complianceVerifiedById], references: [id])
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 }
@@ -461,6 +468,34 @@ model RoutePoint {
   recordedAt DateTime @default(now())
 
   @@index([rideId, recordedAt])
+}
+
+model LedgerJournal {
+  id             String @id @default(uuid())
+  idempotencyKey String @unique
+  requestHash    String
+  kind           String
+  reference      String
+  currency       String
+  actorId        String
+  metadata       Json
+  createdAt      DateTime @default(now())
+  postingTransaction BigInt @default(dbgenerated("txid_current()"))
+  entries        LedgerEntry[]
+
+  @@index([reference, createdAt])
+}
+
+model LedgerEntry {
+  id          String @id @default(uuid())
+  journalId   String
+  journal     LedgerJournal @relation(fields: [journalId], references: [id], onDelete: Restrict)
+  account     String
+  ownerKey    String
+  debitMinor  BigInt @default(0)
+  creditMinor BigInt @default(0)
+
+  @@index([ownerKey, account])
 }
 
 model Payment {

@@ -26,6 +26,8 @@ let driverToken = "";
 let passengerId = "";
 let driverId = "";
 let rideId = "";
+let referrerId = "";
+let referrerCode = "";
 
 describe.sequential("end-to-end acceptance", () => {
   beforeAll(async () => {
@@ -36,6 +38,7 @@ describe.sequential("end-to-end acceptance", () => {
     await redis.connect().catch(() => undefined);
     const admin = await prisma.user.create({ data: { phone: `055${suffix.slice(-7)}`, email: `admin-${suffix}@example.test`, passwordHash: await hashPassword("Acceptance-only-password-123!"), firstName: "Acceptance", lastName: "Admin", role: "ADMIN", status: "ACTIVE" } });
     adminToken = (await issueTokens({ sub: admin.id, role: admin.role, mfa: true })).accessToken;
+    referrerId = admin.id; referrerCode = admin.referralCode;
   });
 
   afterAll(async () => {
@@ -45,7 +48,7 @@ describe.sequential("end-to-end acceptance", () => {
   });
 
   it("registers and verifies a passenger email", async () => {
-    const registered = await request(app).post("/api/v1/auth/register").send({ phone: passengerPhone, email: `passenger-${suffix}@example.test`, password: "Passenger-password-123!", firstName: "Test", lastName: "Passenger", role: "PASSENGER" }).expect(201);
+    const registered = await request(app).post("/api/v1/auth/register").send({ phone: passengerPhone, email: `passenger-${suffix}@example.test`, password: "Passenger-password-123!", firstName: "Test", lastName: "Passenger", role: "PASSENGER", referralCode: referrerCode }).expect(201);
     passengerId = registered.body.data.id;
     passengerToken = registered.body.tokens.accessToken;
     await request(app).post("/api/v1/auth/email-verification/request").set("authorization", `Bearer ${passengerToken}`).expect(202);
@@ -122,7 +125,7 @@ describe.sequential("end-to-end acceptance", () => {
     await prisma.kycDocument.update({ where: { id: profilePhoto.id }, data: { scanStatus: "CLEAN" } });
     await request(app).post(`/api/v1/admin/kyc/${submitted.body.data.id}/review`).set("authorization", `Bearer ${adminToken}`).send({ decision: "APPROVED" }).expect(200);
     const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60_000);
-    await prisma.vehicle.create({ data: { driverId, make: "Toyota", model: "Prius", year: 2022, color: "White", plateNumber: `T${suffix.slice(-6)}`, insuranceExpiresAt: expiresAt, inspectionExpiresAt: expiresAt, registrationExpiresAt: expiresAt } });
+    await request(app).post(`/api/v1/admin/drivers/${driverId}/vehicle`).set("authorization", `Bearer ${adminToken}`).send({ make: "Toyota", model: "Prius", year: 2022, color: "White", plateNumber: `T${suffix.slice(-6)}`, insuranceExpiresAt: expiresAt.toISOString(), inspectionExpiresAt: expiresAt.toISOString(), registrationExpiresAt: expiresAt.toISOString(), evidenceReference: `fictional-evidence-${suffix}` }).expect(200);
     await request(app).post("/api/v1/drivers/me/availability").set("authorization", `Bearer ${driverToken}`).send({ status: "AVAILABLE" }).expect(200);
   });
 
@@ -174,6 +177,16 @@ describe.sequential("end-to-end acceptance", () => {
     expect(ride.estimatedDurationSec).toBe(1_080);
     expect(ride.driverEarningsMinor + ride.companyCommissionMinor).toBe(ride.fareMinor);
     expect(ride.driverEarningsMinor).toBe(ride.fareMinor - Math.round(ride.fareMinor * 1_400 / 10_000));
+    const accounting = await prisma.ledgerJournal.findUniqueOrThrow({ where: { idempotencyKey: `settlement:${rideId}` }, include: { entries: true } });
+    expect(accounting.entries.reduce((net, entry) => net + entry.debitMinor - entry.creditMinor, 0n)).toBe(0n);
+    expect(accounting.entries.find((entry) => entry.account === "COMPANY_COMMISSION")?.creditMinor).toBe(BigInt(ride.companyCommissionMinor));
+    expect(accounting.entries.find((entry) => entry.account === "USER_PAYABLE" && entry.creditMinor > 0n)?.creditMinor).toBe(BigInt(ride.driverEarningsMinor));
+    const referral = await prisma.referral.findUniqueOrThrow({ where: { referredUserId: passengerId } });
+    expect(referral).toMatchObject({ status: "REWARDED", rewardMinor: Math.round(ride.fareMinor * 200 / 10_000) });
+    const reward = await prisma.ledgerJournal.findUniqueOrThrow({ where: { idempotencyKey: `referral-reward:${referral.id}` }, include: { entries: true } });
+    expect(reward.entries.find((entry) => entry.account === "REFERRAL_EXPENSE")?.debitMinor).toBe(BigInt(referral.rewardMinor));
+    expect((await prisma.wallet.findUniqueOrThrow({ where: { userId: referrerId } })).balanceMinor).toBe(referral.rewardMinor);
+    expect(ride.companyCommissionMinor - referral.rewardMinor).toBeGreaterThanOrEqual(0);
     expect(await prisma.safetyIncident.count({ where: { rideId } })).toBe(1);
     expect(await prisma.notification.count({ where: { template: "sos", channel: "PUSH", data: { path: ["rideId"], equals: rideId } } })).toBeGreaterThanOrEqual(1);
     const receipt = await request(app).get(`/api/v1/rides/${rideId}/receipt`).set("authorization", `Bearer ${passengerToken}`).expect(200);
@@ -247,7 +260,9 @@ describe.sequential("end-to-end acceptance", () => {
     const fleetManager = await prisma.user.create({ data: { phone: `033${suffix.slice(-7)}`, passwordHash: await hashPassword("Fleet-password-123!"), firstName: "Fleet", lastName: "Manager", role: "FLEET_MANAGER", status: "ACTIVE" } });
     const fleet = await prisma.fleet.create({ data: { name: "Acceptance Fleet", managerId: fleetManager.id } });
     const fleetToken = (await issueTokens({ sub: fleetManager.id, role: fleetManager.role, mfa: true })).accessToken;
-    await request(app).post("/api/v1/fleet/drivers").set("authorization", `Bearer ${fleetToken}`).send({ fleetId: fleet.id, driverId }).expect(201);
+    await request(app).post("/api/v1/fleet/drivers").set("authorization", `Bearer ${fleetToken}`).send({ fleetId: fleet.id, driverId }).expect(403);
+    await request(app).post("/api/v1/fleet/drivers").set("authorization", `Bearer ${adminToken}`).send({ fleetId: fleet.id, driverId, evidenceReference: "Fictional signed fleet onboarding" }).expect(201);
+    expect((await prisma.vehicle.findUniqueOrThrow({ where: { driverId } })).complianceVerifiedAt).toBeNull();
     await request(app).get("/api/v1/fleet/overview").set("authorization", `Bearer ${fleetToken}`).expect(200);
     await request(app).get("/api/v1/dispatch/rides").set("authorization", `Bearer ${adminToken}`).expect(200);
     await request(app).get("/api/v1/admin/audit-logs").set("authorization", `Bearer ${adminToken}`).expect(200);

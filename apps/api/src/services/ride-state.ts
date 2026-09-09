@@ -1,3 +1,5 @@
+import { SecurityOperationError } from "./security-operation.js";
+
 export const rideTransitions = {
   REQUESTED: ["SEARCHING", "CANCELLED"],
   SEARCHING: ["DRIVER_ASSIGNED", "CANCELLED"],
@@ -17,5 +19,5 @@ export function canTransition(from: RideState, to: RideState) {
 }
 
 export function assertTransition(from: RideState, to: RideState) {
-  if (!canTransition(from, to)) throw new Error(`Invalid ride transition: ${from} -> ${to}`);
+  if (!canTransition(from, to)) throw new SecurityOperationError(409, "RIDE_CONFLICT", `Invalid ride transition: ${from} -> ${to}`);
 }

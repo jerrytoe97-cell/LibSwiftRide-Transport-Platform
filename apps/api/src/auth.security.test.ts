@@ -10,7 +10,9 @@ let account: any;
 let sessions: any[];
 beforeEach(() => {
   vi.restoreAllMocks();
-  account = { id: "fictional-user", role: "PASSENGER", status: "ACTIVE" };
+  account = { id: "fictional-user", role: "PASSENGER", status: "ACTIVE", securityVersion: 0 };
+  vi.spyOn(prisma, "$queryRaw").mockResolvedValue([]);
+  vi.spyOn(prisma.user, "findUniqueOrThrow").mockImplementation((async () => account) as never);
   sessions = [];
   vi.spyOn(prisma.user, "findUnique").mockImplementation((async () => account) as never);
   vi.spyOn(prisma.refreshToken, "create").mockImplementation((async ({ data }: any) => {

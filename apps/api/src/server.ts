@@ -20,6 +20,7 @@ import { logger } from "./logger.js";
 import { distanceMetres, estimateEtaSeconds } from "./services/tracking.js";
 import { queueDocumentExpiryReminders } from "./services/document-reminders.js";
 import { decodeRideRealtimeEvent, publishRideRealtimeEvent, RIDE_REALTIME_CHANNEL } from "./services/ride-realtime.js";
+import { authorizeRideSubscription, deliverAuthorizedRideEvent } from "./services/realtime-authorization.js";
 import { loadOpenApiYaml } from "./services/openapi.js";
 import { validationErrorMessage } from "./services/validation.js";
 import { purgeExpiredRoutePoints } from "./services/location-retention.js";
@@ -116,23 +117,28 @@ app.use((error: unknown, req: Request, res: Response, _next: NextFunction) => {
 const server = createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws", maxPayload: 16 * 1024 });
 const rideSubscriptions = new Map<string, Set<import("ws").WebSocket>>();
-function broadcastToLocalRide(rideId: string, payload: string) {
-  for (const subscriber of rideSubscriptions.get(rideId) ?? []) if (subscriber.readyState === 1) subscriber.send(payload);
+const socketTokens = new WeakMap<import("ws").WebSocket, string>();
+async function broadcastToLocalRide(rideId: string, payload: string) {
+  for (const subscriber of rideSubscriptions.get(rideId) ?? []) {
+    const token = socketTokens.get(subscriber);
+    if (subscriber.readyState !== 1 || !token) continue;
+    await deliverAuthorizedRideEvent(token, rideId, payload, (data) => { if (subscriber.readyState === 1) subscriber.send(data); });
+  }
 }
 
 redisSubscriber.on("message", (channel, value) => {
   if (channel !== RIDE_REALTIME_CHANNEL) return;
   const event = decodeRideRealtimeEvent(value);
-  if (event) broadcastToLocalRide(event.rideId, event.payload);
+  if (event) void broadcastToLocalRide(event.rideId, event.payload);
 });
 
 async function broadcastToRide(rideId: string, payload: string) {
   try {
     const subscriberCount = await publishRideRealtimeEvent(redis, { rideId, payload });
-    if (subscriberCount === 0) broadcastToLocalRide(rideId, payload);
+    if (subscriberCount === 0) await broadcastToLocalRide(rideId, payload);
   } catch (error) {
     logger.warn({ err: error, rideId }, "Redis ride fan-out unavailable; using local delivery");
-    broadcastToLocalRide(rideId, payload);
+    await broadcastToLocalRide(rideId, payload);
   }
 }
 wss.on("connection", async (socket, request) => {
@@ -142,6 +148,7 @@ wss.on("connection", async (socket, request) => {
   if (!token) return socket.close(1008, "Authentication required");
   const user = await verifyAccessToken(token).catch(() => null);
   if (!user) return socket.close(1008, "Authentication required");
+  socketTokens.set(socket, token);
   let lastLocationAt = 0;
   let lastRoutePointAt = 0;
   let lastChatAt = 0;
@@ -150,8 +157,7 @@ wss.on("connection", async (socket, request) => {
       await verifyAccessToken(token);
       const event = JSON.parse(payload.toString());
       if (event.type === "ride.subscribe" && typeof event.rideId === "string") {
-        const ride = await prisma.ride.findUnique({ where: { id: event.rideId }, include: { driver: true } });
-        const allowed = ride && (ride.passengerId === user.sub || ride.driver?.userId === user.sub || ["ADMIN", "SUPPORT"].includes(user.role));
+        const allowed = await authorizeRideSubscription(token, event.rideId);
         if (!allowed) throw new Error("Ride subscription denied");
         const subscribedCount = [...rideSubscriptions.values()].filter((set) => set.has(socket)).length;
         if (subscribedCount >= 10 && !rideSubscriptions.get(event.rideId)?.has(socket)) throw new Error("Subscription limit exceeded");

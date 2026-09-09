@@ -61,7 +61,14 @@ describe("API authorization contract", () => {
     ["POST", "/safety/incidents/:id/contact", ["ADMIN", "SUPPORT", "DISPATCHER"]],
     ["POST", "/payments/:id/confirm-mobile-money", ["ADMIN", "SUPPORT"]],
     ["GET", "/corporate/account", ["BUSINESS_MANAGER", "ADMIN"]],
-    ["POST", "/fleet/drivers", ["FLEET_MANAGER", "ADMIN"]],
+    ["POST", "/fleet/drivers", ["ADMIN"]],
+    ["POST", "/admin/drivers/:id/vehicle", ["ADMIN"]],
+    ["POST", "/admin/drivers/:id/cash-collections", ["ADMIN"]],
+    ["POST", "/admin/payouts/:id/cash-resolution", ["ADMIN"]],
+    ["POST", "/admin/refunds/:id/cash-completion", ["ADMIN"]],
+    ["POST", "/admin/drivers/:id/adjustments", ["ADMIN"]],
+    ["POST", "/admin/adjustments/:id/reversal", ["ADMIN"]],
+    ["POST", "/admin/drivers/:id/reconciliation", ["ADMIN"]],
     ["GET", "/admin/audit-logs", ["ADMIN"]]
   ])("enforces role boundaries for %s %s", (method, path, expectedRoles) => {
     const route = routes.find((candidate) => candidate.method === method && candidate.path === path);

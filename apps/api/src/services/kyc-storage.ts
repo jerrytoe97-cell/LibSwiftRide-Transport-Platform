@@ -117,7 +117,7 @@ export async function verifyAndScanKycObject(input: { storageKey: string; mimeTy
     const downloadUrl = await getSignedUrl(s3, new GetObjectCommand({ Bucket: config.KYC_S3_BUCKET!, Key: input.storageKey, ResponseCacheControl: "no-store" }), { expiresIn: KYC_SCANNER_DOWNLOAD_TTL_SECONDS });
     await requestKycWebhookScan({ downloadUrl, checksum, mimeType: input.mimeType, sizeBytes: input.sizeBytes });
   } else throw Object.assign(new Error("KYC malware scanner is not configured"), { code: "KYC_SCANNER_UNAVAILABLE" });
-  const storageKey = `kyc/clean/${input.storageKey.split("/").slice(2).join("/")}-${checksum.slice(0, 16)}`;
+  const storageKey = `kyc/clean/${input.storageKey.split("/").slice(2).join("/")}-${randomUUID()}`;
   // Persist exact verified bytes, never a mutable quarantine object after scanning.
   await s3.send(new PutObjectCommand({
     Bucket: config.KYC_S3_BUCKET!, Key: storageKey, Body: bytes,

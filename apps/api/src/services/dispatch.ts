@@ -1,6 +1,6 @@
 import { prisma, redis } from "../lib.js";
 import { transactionalEmailContent } from "./transactional-email-templates.js";
-import { eligibleDriverWhere } from "./driver-eligibility.js";
+import { eligibleDriverWhere, lockDriverIdentity } from "./driver-eligibility.js";
 
 const ONLINE_TTL_SECONDS = 120;
 
@@ -43,6 +43,7 @@ export async function matchDriver(rideId: string) {
       continue;
     }
     const assigned = await prisma.$transaction(async (tx) => {
+      await lockDriverIdentity(tx, driverId);
       const driver = await tx.driver.updateMany({ where: { id: driverId, status: "AVAILABLE", ...eligibleDriverWhere() }, data: { status: "ON_TRIP" } });
       if (!driver.count) return null;
       const claimed = await tx.ride.updateMany({ where: { id: ride.id, status: "SEARCHING", driverId: null }, data: { driverId, status: "DRIVER_ASSIGNED" } });
