@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildRoutingUrl, calculateRoadRoute, RoutingError } from "./routing.js";
+import { buildRoutingRequest, buildRoutingUrl, calculateRoadRoute, RoutingError } from "./routing.js";
 
 const pickup = { latitude: 6.3156, longitude: -10.8074 };
 const destination = { latitude: 6.3058, longitude: -10.7492 };
@@ -16,6 +16,38 @@ describe("road routing", () => {
   it("rejects an unconfigured Mapbox provider", () => {
     expect(() => buildRoutingUrl("1,2;3,4", { provider: "mapbox", apiUrl: "https://api.mapbox.com/directions/v5/mapbox/driving" }))
       .toThrow("Routing service is not configured");
+  });
+
+  it("builds an authenticated Google Routes POST request without putting the key in the URL", () => {
+    const request = buildRoutingRequest(pickup, destination, {
+      provider: "google", apiUrl: "https://routes.googleapis.com/directions/v2:computeRoutes", googleApiKey: "synthetic-google-key"
+    });
+    expect(request.url).toBe("https://routes.googleapis.com/directions/v2:computeRoutes");
+    expect(request.init).toMatchObject({
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-goog-api-key": "synthetic-google-key",
+        "x-goog-fieldmask": "routes.duration,routes.distanceMeters,routes.polyline.encodedPolyline"
+      }
+    });
+    expect(JSON.parse(request.init.body!)).toMatchObject({
+      origin: { location: { latLng: pickup } }, destination: { location: { latLng: destination } },
+      travelMode: "DRIVE", routingPreference: "TRAFFIC_AWARE", computeAlternativeRoutes: false
+    });
+    expect(JSON.stringify(request)).not.toContain("?key=");
+  });
+
+  it("normalizes a Google route response and decoded polyline", async () => {
+    const provider = vi.fn().mockResolvedValue(Response.json({ routes: [{
+      distanceMeters: 7432, duration: "1119s", polyline: { encodedPolyline: "_p~iF~ps|U_ulLnnqC_mqNvxq`@" }
+    }] }));
+    await expect(calculateRoadRoute(pickup, destination, provider, {
+      provider: "google", apiUrl: "https://routes.googleapis.com/directions/v2:computeRoutes", googleApiKey: "synthetic-google-key"
+    })).resolves.toEqual({
+      distanceM: 7432, durationSec: 1119,
+      geometry: [[-120.2, 38.5], [-120.95, 40.7], [-126.453, 43.252]]
+    });
   });
 
   it("returns provider-authoritative distance, duration and GeoJSON coordinates", async () => {

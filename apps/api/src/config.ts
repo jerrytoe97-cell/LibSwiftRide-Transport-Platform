@@ -19,9 +19,10 @@ export const environmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
-  ROUTING_PROVIDER: z.enum(["osrm", "mapbox"]).default("osrm"),
+  ROUTING_PROVIDER: z.enum(["osrm", "mapbox", "google"]).default("osrm"),
   ROUTING_API_URL: z.string().url().default("https://router.project-osrm.org"),
   MAPBOX_ROUTING_TOKEN: optionalSecret,
+  GOOGLE_ROUTES_API_KEY: optionalSecret,
   GEOCODING_API_TOKEN: optionalSecret,
   GEOCODING_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
   SURGE_PRICING_ENABLED: z.enum(["true", "false"]).default("false").transform((value) => value === "true"),
@@ -158,6 +159,9 @@ export const environmentSchema = z.object({
     }
     if (environment.ROUTING_PROVIDER === "mapbox" && !environment.MAPBOX_ROUTING_TOKEN) {
       context.addIssue({ code: "custom", path: ["MAPBOX_ROUTING_TOKEN"], message: "MAPBOX_ROUTING_TOKEN is required when ROUTING_PROVIDER=mapbox" });
+    }
+    if (environment.ROUTING_PROVIDER === "google" && !environment.GOOGLE_ROUTES_API_KEY) {
+      context.addIssue({ code: "custom", path: ["GOOGLE_ROUTES_API_KEY"], message: "GOOGLE_ROUTES_API_KEY is required when ROUTING_PROVIDER=google" });
     }
     for (const [field, secret] of [["JWT_ACCESS_SECRET", environment.JWT_ACCESS_SECRET], ["JWT_REFRESH_SECRET", environment.JWT_REFRESH_SECRET], ["PAYMENT_WEBHOOK_SECRET", environment.PAYMENT_WEBHOOK_SECRET], ["MFA_ENCRYPTION_KEY", environment.MFA_ENCRYPTION_KEY ?? ""], ["RESEND_API_KEY", environment.RESEND_API_KEY ?? ""], ["ZOHO_SMTP_APP_PASSWORD", environment.ZOHO_SMTP_APP_PASSWORD ?? ""]] as const) {
       if (/replace|example|change|development|test-secret/i.test(secret)) {

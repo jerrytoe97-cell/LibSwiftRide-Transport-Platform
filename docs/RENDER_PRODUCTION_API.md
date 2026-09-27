@@ -35,7 +35,7 @@ Enter these `sync: false` variables without committing their values:
 
 - `CORS_ORIGINS`: comma-separated exact production origins, without paths or
   trailing slashes.
-- `MAPBOX_ROUTING_TOKEN`: production token with Directions access.
+- `GOOGLE_ROUTES_API_KEY`: server-only key with Google Routes API access, restricted to the Routes API and the API service's approved egress where practical.
 - `ZOHO_SMTP_APP_PASSWORD`: app password for `support@libswiftride.com`.
 - `RESEND_API_KEY`: retain the existing key for rollback; Zoho remains selected.
 - `ORANGE_MONEY_NUMBER` and `MTN_MOMO_NUMBER`: required only when enabling live

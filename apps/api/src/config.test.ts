@@ -56,6 +56,20 @@ describe("production environment safeguards", () => {
     })).toThrow("Invalid environment");
   });
 
+  it("accepts Google Routes only with a server-side API key", () => {
+    expect(parseEnvironment({
+      ...production,
+      ROUTING_PROVIDER: "google",
+      ROUTING_API_URL: "https://routes.googleapis.com/directions/v2:computeRoutes",
+      GOOGLE_ROUTES_API_KEY: "google-routes-api-key-value"
+    })).toMatchObject({ ROUTING_PROVIDER: "google" });
+    expect(() => parseEnvironment({
+      ...production,
+      ROUTING_PROVIDER: "google",
+      ROUTING_API_URL: "https://routes.googleapis.com/directions/v2:computeRoutes"
+    })).toThrow("GOOGLE_ROUTES_API_KEY");
+  });
+
   it("requires complete protected email configuration when production delivery is enabled", () => {
     expect(() => parseEnvironment({ ...production, NOTIFICATION_PROVIDER: "hooks", EMAIL_PROVIDER: "resend" })).toThrow("Invalid environment");
     expect(parseEnvironment({

@@ -55,10 +55,10 @@ services:
       - key: METRICS_TOKEN
         generateValue: true
       - key: ROUTING_PROVIDER
-        value: mapbox
+        value: google
       - key: ROUTING_API_URL
-        value: https://api.mapbox.com/directions/v5/mapbox/driving
-      - key: MAPBOX_ROUTING_TOKEN
+        value: https://routes.googleapis.com/directions/v2:computeRoutes
+      - key: GOOGLE_ROUTES_API_KEY
         sync: false
       - key: ROUTE_POINT_RETENTION_DAYS
         value: "30"
