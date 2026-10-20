@@ -1,4 +1,4 @@
-FROM node:22-alpine AS base
+FROM node:26-alpine AS base
 RUN corepack enable
 WORKDIR /app
 COPY package.json pnpm-workspace.yaml turbo.json tsconfig.base.json ./
@@ -13,7 +13,7 @@ FROM dependencies AS build
 COPY apps/api apps/api
 RUN pnpm --filter @libswiftride/api prisma:generate && pnpm --filter @libswiftride/api build
 
-FROM node:22-alpine AS runtime
+FROM node:26-alpine AS runtime
 ENV NODE_ENV=production
 RUN addgroup -S app && adduser -S app -G app
 WORKDIR /app
